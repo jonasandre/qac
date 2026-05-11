@@ -1,0 +1,44 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+
+      - run: bun install --frozen-lockfile
+      - run: bun test
+
+      - name: Compile binaries
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ENTRY="packages/cli/src/index.ts"
+          for target in linux-x64 linux-x64-musl linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
+            out="dist/qac-${target}"
+            if [ "$target" = "windows-x64" ]; then out="${out}.exe"; fi
+            echo "Building ${out}..."
+            bun build "$ENTRY" --compile --target="bun-${target}" --outfile "$out"
+          done
+          ls -lh dist/
+
+      - name: Create checksums
+        working-directory: dist
+        run: shasum -a 256 qac-* > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

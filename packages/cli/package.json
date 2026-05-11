@@ -1,0 +1,19 @@
+{
+  "name": "@qac/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "bin": {
+    "qac": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@qac/core": "workspace:*",
+    "@qac/mcp": "workspace:*",
+    "commander": "^12.1.0",
+    "zod": "^3.23.8"
+  }
+}
