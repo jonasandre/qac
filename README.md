@@ -27,34 +27,113 @@ focused specifically on analytical data extraction.
 
 ## Install
 
-Pre-built binaries are published on each tagged release for:
+Pre-built binaries are published on each tagged release. Pick the asset that
+matches your OS/arch from the GitHub Releases page:
 
-- `linux-x64`, `linux-x64-musl`, `linux-arm64`
-- `darwin-x64`, `darwin-arm64`
-- `windows-x64`
+| OS      | Architecture        | Asset                  |
+| ------- | ------------------- | ---------------------- |
+| Linux   | x86-64 (glibc)      | `qac-linux-x64`        |
+| Linux   | x86-64 (musl/Alpine)| `qac-linux-x64-musl`   |
+| Linux   | aarch64 / ARM64     | `qac-linux-arm64`      |
+| macOS   | Intel               | `qac-darwin-x64`       |
+| macOS   | Apple Silicon (M1+) | `qac-darwin-arm64`     |
+| Windows | x86-64              | `qac-windows-x64.exe`  |
 
-Download from the GitHub release page, then:
+A `SHA256SUMS` file is published alongside the binaries; verify it before
+moving the binary into your `PATH`.
+
+### macOS
 
 ```sh
-chmod +x qac-darwin-arm64
-mv qac-darwin-arm64 /usr/local/bin/qac
+# Apple Silicon (M1/M2/M3/M4) — use x64 binary on Intel Macs.
+curl -fLo qac https://github.com/jonasandre/qac/releases/latest/download/qac-darwin-arm64
+chmod +x qac
+
+# The binary is unsigned; clear Gatekeeper quarantine once.
+xattr -d com.apple.quarantine qac
+
+sudo mv qac /usr/local/bin/qac
+qac --version
 ```
 
-On macOS the binary is unsigned; clear the Gatekeeper quarantine attribute
-once after download:
+If Gatekeeper still complains, open *System Settings → Privacy & Security* and
+click *Allow Anyway* after the first run is blocked.
+
+Apple Silicon users: the `darwin-arm64` binary runs natively. Avoid the
+`darwin-x64` build (would run under Rosetta and be slower).
+
+### Linux
 
 ```sh
-xattr -d com.apple.quarantine /usr/local/bin/qac
+# Pick the arch that matches `uname -m`:
+#   x86_64  → qac-linux-x64       (Debian/Ubuntu/Fedora/RHEL — glibc)
+#   x86_64  → qac-linux-x64-musl  (Alpine, distroless, scratch containers)
+#   aarch64 → qac-linux-arm64     (ARM servers, Raspberry Pi 64-bit)
+curl -fLo qac https://github.com/jonasandre/qac/releases/latest/download/qac-linux-x64
+chmod +x qac
+sudo mv qac /usr/local/bin/qac
+qac --version
 ```
+
+For unprivileged installs:
+
+```sh
+mkdir -p ~/.local/bin
+mv qac ~/.local/bin/qac
+# Make sure ~/.local/bin is in your PATH (usually is for systemd-based distros).
+```
+
+### Windows
+
+Download `qac-windows-x64.exe` from the latest release and:
+
+**PowerShell (recommended):**
+
+```powershell
+$dst = "$env:USERPROFILE\bin"
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+Move-Item .\qac-windows-x64.exe "$dst\qac.exe"
+
+# Add to user PATH (once).
+[Environment]::SetEnvironmentVariable(
+  "Path",
+  [Environment]::GetEnvironmentVariable("Path", "User") + ";$dst",
+  "User"
+)
+# Open a new shell, then:
+qac --version
+```
+
+**cmd.exe:**
+
+```cmd
+move qac-windows-x64.exe %USERPROFILE%\bin\qac.exe
+setx PATH "%PATH%;%USERPROFILE%\bin"
+```
+
+On first run, Windows SmartScreen may show *"Windows protected your PC"* —
+click *More info → Run anyway*. The binary is unsigned in the MVP; signing
+will land in a later release.
 
 ### Build from source
 
+Requires Bun 1.2+ ([install instructions](https://bun.sh/docs/installation)):
+
 ```sh
+git clone https://github.com/jonasandre/qac.git
+cd qlik-api-cli
 bun install
-bun run build:local        # produces dist/qac
+bun test
+bun run build:local       # produces dist/qac for your current OS/arch
 ```
 
-Requires Bun 1.2+.
+Cross-compile to any target without a matching host:
+
+```sh
+bun build packages/cli/src/index.ts \
+  --compile --target=bun-linux-arm64 \
+  --outfile dist/qac-linux-arm64
+```
 
 ## Configure
 
@@ -120,14 +199,30 @@ with exit code 1 (usage), 2 (execution) or 3 (auth/config).
 
 ## MCP usage
 
-Run via stdio:
+`qac mcp` runs as an MCP server over **stdio**. There is no port to expose:
+the client (Claude Desktop, Claude Code, ChatGPT Desktop, Cursor, …) spawns
+`qac mcp` as a subprocess and communicates over its stdin/stdout. Auth lives
+in the local `~/.qac/config.yaml`, so credentials never leave your machine
+except for the call to Qlik Cloud itself.
 
-```sh
-qac mcp
-```
+### Before wiring it up
 
-Wire it into an MCP-aware client. Example for Claude Desktop
-(`claude_desktop_config.json`):
+1. Install `qac` and confirm `qac --version` works in a shell.
+2. Configure at least one context (`qac context create <name> --tenant ... --api-key ...`).
+3. Verify it works directly: `qac apps list --limit 1`.
+4. Note the absolute path to the binary — MCP clients usually need the full
+   path because they don't inherit your shell's `PATH`:
+
+   - macOS / Linux: `which qac` → e.g. `/usr/local/bin/qac`.
+   - Windows: `where.exe qac` → e.g. `C:\Users\<you>\bin\qac.exe`.
+
+### Claude Desktop
+
+Edit `claude_desktop_config.json`. Location:
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
 
 ```json
 {
@@ -140,8 +235,103 @@ Wire it into an MCP-aware client. Example for Claude Desktop
 }
 ```
 
-All tools accept an optional `context` argument that names a context other
-than the active one. Call `list_contexts` to discover which are available.
+Windows (escape backslashes in JSON):
+
+```json
+{
+  "mcpServers": {
+    "qac": {
+      "command": "C:\\Users\\<you>\\bin\\qac.exe",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Fully restart Claude Desktop (quit, then reopen — not just close the window).
+You should see a tool/plug icon in the message composer indicating MCP tools
+are loaded. Hover or click to see `qac`'s tools listed.
+
+If credentials should come from environment variables instead of the config
+file, add them under `env`:
+
+```json
+{
+  "mcpServers": {
+    "qac": {
+      "command": "/usr/local/bin/qac",
+      "args": ["mcp"],
+      "env": {
+        "QAC_TENANT_URL": "https://your-tenant.qlikcloud.com",
+        "QAC_API_KEY": "qlik_xxx_yyy"
+      }
+    }
+  }
+}
+```
+
+### Claude Code
+
+From the project where you want Qlik available:
+
+```sh
+claude mcp add qac /usr/local/bin/qac mcp
+```
+
+This writes the entry to `.claude/mcp.json` (project-scoped). To install
+user-wide instead, add `--scope user`. To verify:
+
+```sh
+claude mcp list
+```
+
+Start a session in that project and Claude Code will spawn `qac mcp` on
+demand.
+
+### ChatGPT Desktop
+
+ChatGPT Desktop supports stdio MCP servers through **Connectors** (Developer
+mode). Path may shift release-to-release; the general flow is:
+
+1. Open ChatGPT Desktop → *Settings → Connectors* (you may need to enable
+   *Developer mode* under *Settings → Advanced*).
+2. *Add custom connector* → choose *Local (stdio)*.
+3. Fill in:
+   - **Name:** `qac`
+   - **Command:** absolute path to the `qac` binary (e.g. `/usr/local/bin/qac`).
+   - **Arguments:** `mcp`
+   - **Environment** (optional): set `QAC_TENANT_URL`, `QAC_API_KEY`, etc. if
+     you don't want to depend on `~/.qac/config.yaml`.
+4. Save and enable the connector. Tools appear in the composer's tool menu.
+
+ChatGPT web (`chat.openai.com`) and the OpenAI API itself do **not** speak
+stdio MCP directly. To use `qac` from web/API workflows, run it from a custom
+agent harness that bridges OpenAI tool calls to the MCP protocol (e.g. via
+`@modelcontextprotocol/sdk` Client + your own glue code).
+
+### Other MCP-aware clients
+
+Same pattern — wire the absolute path to `qac` as the command and `mcp` as
+the single argument:
+
+- **Cursor:** `.cursor/mcp.json` (project) or settings UI.
+- **Cline / Continue / Zed / …:** see each client's MCP docs.
+
+### Verifying without a client
+
+```sh
+npx @modelcontextprotocol/inspector qac mcp
+```
+
+Opens a local web UI that connects to `qac mcp` over stdio, lists the 11
+tools, and lets you invoke each one with form-validated arguments — useful
+to confirm everything works before plugging into a real LLM client.
+
+### Per-call context override
+
+All tools accept an optional `context` argument that selects a tenant other
+than the active one. Call `list_contexts` first to discover which contexts
+are available.
 
 ## Tool reference
 
