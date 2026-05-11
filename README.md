@@ -49,8 +49,9 @@ moving the binary into your `PATH`.
 curl -fLo qac https://github.com/jonasandre/qac/releases/latest/download/qac-darwin-arm64
 chmod +x qac
 
-# The binary is unsigned; clear Gatekeeper quarantine once.
-xattr -d com.apple.quarantine qac
+# The binary is unsigned; clear Gatekeeper quarantine if present
+# (no-op if binary wasn't downloaded via browser/AirDrop).
+xattr -d com.apple.quarantine qac 2>/dev/null || true
 
 sudo mv qac /usr/local/bin/qac
 qac --version

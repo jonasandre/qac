@@ -13,8 +13,9 @@ import {
   type UsageRecorder,
 } from '@qac/core';
 import { z } from 'zod';
+import pkg from '../package.json' with { type: 'json' };
 
-const VERSION = '0.0.0';
+const VERSION = pkg.version;
 
 export type ServerOptions = {
   provider?: ContextProvider;

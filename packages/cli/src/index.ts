@@ -7,13 +7,14 @@ import { appsCommand, spacesCommand } from './commands/apps.ts';
 import { appCommand } from './commands/app.ts';
 import { mcpCommand } from './commands/mcp.ts';
 import { fail } from './output.ts';
+import pkg from '../package.json' with { type: 'json' };
 
 const program = new Command();
 
 program
   .name('qac')
   .description('Qlik API Companion — CLI + MCP for LLM agents over Qlik Cloud')
-  .version('0.0.0')
+  .version(pkg.version)
   .option('--context <name>', 'Override active context for this invocation')
   .option('--config <path>', 'Path to config file (default: ~/.qac/config.yaml)')
   .option('--debug', 'Print debug info to stderr');
