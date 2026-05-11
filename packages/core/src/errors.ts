@@ -14,6 +14,8 @@ export type QacErrorCode =
   | 'EXPRESSION_INVALID'
   | 'REST_ERROR'
   | 'INVALID_INPUT'
+  | 'INSECURE_TENANT_URL'
+  | 'INVALID_SET_EXPRESSION'
   | 'UNKNOWN';
 
 export class QacError extends Error {

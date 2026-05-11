@@ -89,6 +89,12 @@ export class FileContextProvider implements ContextProvider {
     try {
       const raw = await readFile(this.path, 'utf8');
       const parsed = YAML.parse(raw) as ConfigFile | null;
+      if (process.platform !== 'win32') {
+        const perms = await this.checkPermissions();
+        if (!perms.ok && perms.warning) {
+          process.stderr.write(`qac: warning: ${perms.warning}\n`);
+        }
+      }
       return parsed ?? {};
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
@@ -101,13 +107,20 @@ export class FileContextProvider implements ContextProvider {
   async write(file: ConfigFile): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true });
     const yaml = YAML.stringify(file);
-    await writeFile(this.path, yaml, 'utf8');
-    await chmod(this.path, 0o600).catch(() => {
-      // chmod can fail on platforms that don't support it (Windows); ignore.
-    });
+    await writeFile(this.path, yaml, { encoding: 'utf8', mode: 0o600 });
+    if (process.platform === 'win32') return;
+    // Repair perms on existing file (writeFile mode is only honored on create).
+    try {
+      await chmod(this.path, 0o600);
+    } catch (err) {
+      process.stderr.write(
+        `qac: warning: could not set 0600 on ${this.path}: ${(err as Error).message}\n`,
+      );
+    }
   }
 
   async checkPermissions(): Promise<{ ok: boolean; warning?: string }> {
+    if (process.platform === 'win32') return { ok: true };
     try {
       const st = await stat(this.path);
       const mode = st.mode & 0o777;

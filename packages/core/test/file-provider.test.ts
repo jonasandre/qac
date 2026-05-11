@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -113,6 +113,31 @@ describe('FileContextProvider', () => {
       false,
     );
     expect(await p.active()).toBe('a');
+  });
+
+  test.skipIf(process.platform === 'win32')('write creates config with mode 0600', async () => {
+    const p = new FileContextProvider(path);
+    await p.create('prod', { tenant: 'https://acme.qlikcloud.com', auth: { type: 'api-key', key: 'k' } });
+    const mode = statSync(path).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  test.skipIf(process.platform === 'win32')('write repairs loose perms on existing file', async () => {
+    const p = new FileContextProvider(path);
+    await p.create('prod', { tenant: 'https://acme.qlikcloud.com', auth: { type: 'api-key', key: 'k' } });
+    chmodSync(path, 0o644);
+    await p.create('staging', { tenant: 'https://stg.qlikcloud.com', auth: { type: 'api-key', key: 'k2' } });
+    const mode = statSync(path).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  test.skipIf(process.platform === 'win32')('checkPermissions warns on loose mode', async () => {
+    const p = new FileContextProvider(path);
+    await p.create('prod', { tenant: 'https://acme.qlikcloud.com', auth: { type: 'api-key', key: 'k' } });
+    chmodSync(path, 0o644);
+    const result = await p.checkPermissions();
+    expect(result.ok).toBe(false);
+    expect(result.warning).toMatch(/loose permissions/);
   });
 
   test('QacError shape preserved in JSON serialization', async () => {

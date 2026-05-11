@@ -8,6 +8,7 @@ export const evaluateInput = z.object({
   expression: z
     .string()
     .min(1)
+    .max(5000)
     .describe(
       'A single Qlik expression to evaluate against the app, e.g. `Sum([Sales])` or `Count(distinct [Customer])`.',
     ),

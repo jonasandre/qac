@@ -3,8 +3,8 @@ import { listFieldsTool } from '../src/tools/list-fields.ts';
 import { listMasterItemsTool } from '../src/tools/list-master-items.ts';
 import { listSheetsTool } from '../src/tools/list-sheets.ts';
 import { describeFieldTool } from '../src/tools/describe-field.ts';
-import { queryTool } from '../src/tools/query.ts';
-import { evaluateTool } from '../src/tools/evaluate.ts';
+import { queryInput, queryTool } from '../src/tools/query.ts';
+import { evaluateInput, evaluateTool } from '../src/tools/evaluate.ts';
 import { NoopUsageRecorder } from '../src/usage.ts';
 import type { QixAppHandle, QixSessionManager } from '../src/session/manager.ts';
 import type { QlikContext } from '../src/types.ts';
@@ -252,6 +252,100 @@ describe('query', () => {
       ),
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
+
+  test('schema rejects oversize dimensions array', () => {
+    const dims = Array.from({ length: 51 }, (_, i) => `[D${i}]`);
+    const result = queryInput.safeParse({ appId: 'a1', dimensions: dims });
+    expect(result.success).toBe(false);
+  });
+
+  test('schema rejects oversize filter values', () => {
+    const values = Array.from({ length: 1001 }, (_, i) => `v${i}`);
+    const result = queryInput.safeParse({
+      appId: 'a1',
+      measures: ['Sum([X])'],
+      filters: [{ field: 'F', values }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('schema rejects overlong expression', () => {
+    const big = 'x'.repeat(5001);
+    const result = queryInput.safeParse({ appId: 'a1', measures: [big] });
+    expect(result.success).toBe(false);
+  });
+
+  test('escapes closing bracket in filter field name', async () => {
+    let capturedDef: string | undefined;
+    const doc = {
+      createSessionObject: async (props: unknown) => {
+        const p = props as { qHyperCubeDef: { qMeasures: Array<{ qDef: { qDef: string } }> } };
+        capturedDef = p.qHyperCubeDef.qMeasures[0]?.qDef.qDef;
+        return {
+          getLayout: async () => ({ qHyperCube: { qSize: { qcx: 1, qcy: 0 }, qDataPages: [] } }),
+          getHyperCubeData: async () => [],
+        };
+      },
+    };
+    await queryTool.run(
+      ctx,
+      {
+        appId: 'a1',
+        dimensions: [],
+        measures: ['Sum([Sales])'],
+        filters: [{ field: 'Region]injection', values: ['EU'] }],
+        limit: 100,
+        offset: 0,
+      },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+    expect(capturedDef).toContain('[Region]]injection]');
+  });
+
+  test('rejects malformed raw setExpression', async () => {
+    const doc = { createSessionObject: async () => ({ getLayout: async () => ({}), getHyperCubeData: async () => [] }) };
+    await expect(
+      queryTool.run(
+        ctx,
+        {
+          appId: 'a1',
+          dimensions: [],
+          measures: ['Sum([Sales])'],
+          setExpression: 'arbitrary garbage',
+          limit: 100,
+          offset: 0,
+        },
+        { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_SET_EXPRESSION' });
+  });
+
+  test('accepts well-shaped setExpression', async () => {
+    let capturedDef: string | undefined;
+    const doc = {
+      createSessionObject: async (props: unknown) => {
+        const p = props as { qHyperCubeDef: { qMeasures: Array<{ qDef: { qDef: string } }> } };
+        capturedDef = p.qHyperCubeDef.qMeasures[0]?.qDef.qDef;
+        return {
+          getLayout: async () => ({ qHyperCube: { qSize: { qcx: 1, qcy: 0 }, qDataPages: [] } }),
+          getHyperCubeData: async () => [],
+        };
+      },
+    };
+    await queryTool.run(
+      ctx,
+      {
+        appId: 'a1',
+        dimensions: [],
+        measures: ['Sum([Sales])'],
+        setExpression: '{<Year={2025}>}',
+        limit: 100,
+        offset: 0,
+      },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+    expect(capturedDef).toContain('{<Year={2025}>}');
+  });
 });
 
 describe('evaluate', () => {
@@ -277,6 +371,12 @@ describe('evaluate', () => {
       { qix: makeSession(doc), usage: new NoopUsageRecorder() },
     );
     expect(out).toMatchObject({ value: 'EU', type: 'string' });
+  });
+
+  test('schema rejects overlong expression', () => {
+    const big = 'x'.repeat(5001);
+    const result = evaluateInput.safeParse({ appId: 'a1', expression: big });
+    expect(result.success).toBe(false);
   });
 
   test('EXPRESSION_INVALID on engine error', async () => {

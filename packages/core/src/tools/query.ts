@@ -3,25 +3,55 @@ import { QacError } from '../errors.ts';
 import { defineTool } from './tool.ts';
 import { asDoc, type NxDataPage } from './qix-helpers.ts';
 
+// All limits sized to comfortably exceed real dashboard queries while
+// blocking megabyte-scale payloads / DoS via the MCP/CLI surface.
+const LIMITS = {
+  arrayDimensions: 50,
+  arrayMeasures: 50,
+  arrayFilters: 50,
+  arrayFilterValues: 1000,
+  arraySort: 10,
+  stringField: 256,
+  stringValue: 256,
+  stringExpression: 5000,
+} as const;
+
 const dimensionSchema = z.union([
-  z.string().describe('Field name (will be bracketed) or expression.'),
+  z.string().max(LIMITS.stringExpression).describe('Field name (will be bracketed) or expression.'),
   z.object({
-    field: z.string().describe('Field name or expression for the dimension.'),
-    label: z.string().optional().describe('Display label for the dimension column.'),
+    field: z
+      .string()
+      .max(LIMITS.stringExpression)
+      .describe('Field name or expression for the dimension.'),
+    label: z
+      .string()
+      .max(LIMITS.stringField)
+      .optional()
+      .describe('Display label for the dimension column.'),
   }),
 ]);
 
 const measureSchema = z.union([
-  z.string().describe('Expression, e.g. `Sum([Sales])`.'),
+  z.string().max(LIMITS.stringExpression).describe('Expression, e.g. `Sum([Sales])`.'),
   z.object({
-    expression: z.string().describe('Aggregation expression, e.g. `Sum([Sales])`.'),
-    label: z.string().optional().describe('Display label for the measure column.'),
+    expression: z
+      .string()
+      .max(LIMITS.stringExpression)
+      .describe('Aggregation expression, e.g. `Sum([Sales])`.'),
+    label: z
+      .string()
+      .max(LIMITS.stringField)
+      .optional()
+      .describe('Display label for the measure column.'),
   }),
 ]);
 
 const filterSchema = z.object({
-  field: z.string().describe('Field name to filter on.'),
-  values: z.array(z.union([z.string(), z.number()])).describe('Values to keep.'),
+  field: z.string().max(LIMITS.stringField).describe('Field name to filter on.'),
+  values: z
+    .array(z.union([z.string().max(LIMITS.stringValue), z.number()]))
+    .max(LIMITS.arrayFilterValues)
+    .describe('Values to keep.'),
 });
 
 const sortSchema = z.object({
@@ -31,17 +61,18 @@ const sortSchema = z.object({
 
 export const queryInput = z.object({
   appId: z.string().min(1),
-  dimensions: z.array(dimensionSchema).default([]),
-  measures: z.array(measureSchema).default([]),
-  filters: z.array(filterSchema).optional(),
+  dimensions: z.array(dimensionSchema).max(LIMITS.arrayDimensions).default([]),
+  measures: z.array(measureSchema).max(LIMITS.arrayMeasures).default([]),
+  filters: z.array(filterSchema).max(LIMITS.arrayFilters).optional(),
   setExpression: z
     .string()
+    .max(LIMITS.stringExpression)
     .optional()
     .describe(
       'Optional Qlik set analysis modifier applied to all measures, e.g. `{<Year={"2025"}>}`. ' +
         'Use for advanced filtering that cannot be expressed via `filters`.',
     ),
-  sort: z.array(sortSchema).optional(),
+  sort: z.array(sortSchema).max(LIMITS.arraySort).optional(),
   limit: z.number().int().min(1).max(10000).optional().default(1000),
   offset: z.number().int().min(0).optional().default(0),
 });
@@ -168,11 +199,13 @@ function combineSetExpression(
   filters: QueryInput['filters'],
   setExpression: string | undefined,
 ): string | undefined {
+  if (setExpression !== undefined) assertSetExpressionShape(setExpression);
+
   const filterClauses = (filters ?? []).map((f) => {
     const escaped = f.values
       .map((v) => (typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`))
       .join(',');
-    return `[${f.field}]={${escaped}}`;
+    return `[${escapeQlikFieldName(f.field)}]={${escaped}}`;
   });
 
   if (!filterClauses.length && !setExpression) return undefined;
@@ -182,6 +215,21 @@ function combineSetExpression(
   // If user passed setExpression, merge by stripping outer braces and joining clauses.
   const merged = setExpression.replace(/^\{<?/, '').replace(/>?\}$/, '');
   return `{<${[merged, filterClauses.join(',')].filter(Boolean).join(',')}>}`;
+}
+
+function assertSetExpressionShape(expr: string): void {
+  // Accept Qlik set modifiers: `<...>` optionally wrapped in `{...}`.
+  // Rejects free-form text that could splice arbitrary clauses.
+  if (!/^\s*\{?\s*<[\s\S]*>\s*\}?\s*$/.test(expr)) {
+    throw new QacError(
+      'INVALID_SET_EXPRESSION',
+      'setExpression must match the Qlik set modifier shape `{<...>}`',
+    );
+  }
+}
+
+function escapeQlikFieldName(name: string): string {
+  return name.replace(/\]/g, ']]');
 }
 
 function stripBrackets(input: string): string {

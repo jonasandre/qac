@@ -1,5 +1,7 @@
-import { wrapUnknown } from './errors.ts';
+import { QacError, wrapUnknown } from './errors.ts';
 import type { QlikContext } from './types.ts';
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
 type ApiKeyHostConfig = {
   authType: 'apiKey';
@@ -34,6 +36,21 @@ export function toHostConfig(ctx: QlikContext): QlikHostConfig {
 function normalizeHost(input: string): string {
   let h = input.trim();
   if (!/^https?:\/\//i.test(h)) h = `https://${h}`;
+  if (/^http:\/\//i.test(h)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(h);
+    } catch {
+      throw new QacError('INSECURE_TENANT_URL', `invalid tenant URL: ${input}`);
+    }
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+    if (!LOOPBACK_HOSTS.has(hostname.toLowerCase())) {
+      throw new QacError(
+        'INSECURE_TENANT_URL',
+        `http:// is only allowed for localhost; use https:// for ${parsed.hostname}`,
+      );
+    }
+  }
   return h.replace(/\/+$/, '');
 }
 

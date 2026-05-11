@@ -40,12 +40,30 @@ describe('toHostConfig', () => {
     expect(toHostConfig(ctx).host).toBe('https://acme.qlikcloud.com');
   });
 
-  test('keeps http scheme intact', () => {
+  test('allows http for localhost', () => {
     const ctx: QlikContext = {
       name: 'local',
       tenant: 'http://localhost:9999',
       credentials: { type: 'api-key', apiKey: 'k' },
     };
     expect(toHostConfig(ctx).host).toBe('http://localhost:9999');
+  });
+
+  test('allows http for 127.0.0.1', () => {
+    const ctx: QlikContext = {
+      name: 'local',
+      tenant: 'http://127.0.0.1:9999',
+      credentials: { type: 'api-key', apiKey: 'k' },
+    };
+    expect(toHostConfig(ctx).host).toBe('http://127.0.0.1:9999');
+  });
+
+  test('rejects http for non-loopback tenant', () => {
+    const ctx: QlikContext = {
+      name: 'prod',
+      tenant: 'http://acme.qlikcloud.com',
+      credentials: { type: 'api-key', apiKey: 'k' },
+    };
+    expect(() => toHostConfig(ctx)).toThrow(/http:\/\/ is only allowed for localhost/);
   });
 });

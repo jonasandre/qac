@@ -137,24 +137,41 @@ bun build packages/cli/src/index.ts \
 
 ## Configure
 
-Create a context (stored in `~/.qac/config.yaml`, mode 600):
+Create a context (stored in `~/.qac/config.yaml`, mode 600). Prefer the
+`$env:VAR_NAME` reference or the interactive prompt — passing a raw secret as
+a CLI arg can leak via shell history and process listings.
+
+Recommended: reference an env var.
 
 ```sh
+export QAC_PROD_API_KEY=qlik_xxx_yyy
 qac context create prod \
   --tenant https://your-tenant.qlikcloud.com \
-  --api-key qlik_xxx_yyy
+  --api-key '$env:QAC_PROD_API_KEY'
 ```
 
-Or with OAuth2 M2M:
+Or omit the flag and `qac` will prompt for the secret (no echo) on a TTY:
 
 ```sh
+qac context create prod --tenant https://your-tenant.qlikcloud.com
+# API key: ********
+```
+
+OAuth2 M2M with an env-referenced secret:
+
+```sh
+export QAC_PROD_OAUTH_SECRET=...
 qac context create prod \
   --tenant https://your-tenant.qlikcloud.com \
   --oauth-client-id ... \
-  --oauth-client-secret ...
+  --oauth-client-secret '$env:QAC_PROD_OAUTH_SECRET'
 ```
 
-Secrets can also be referenced through environment variables in the YAML:
+Scripting note: literal secrets via `--api-key qlik_xxx` or
+`--oauth-client-secret ...` still work, but `qac` prints a stderr warning on
+interactive shells. Quote `$env:` references to stop the shell expanding `$`.
+
+The same secrets can be referenced through environment variables in the YAML:
 
 ```yaml
 contexts:

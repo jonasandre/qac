@@ -1,7 +1,14 @@
 import { Command } from 'commander';
 import { FileContextProvider, QacError } from '@qac/core';
 import { ok } from '../output.ts';
+import { isInteractive, promptSecret, warnLiteralSecret } from '../prompt.ts';
 import type { GlobalOpts } from '../resolve-context.ts';
+
+const ENV_REF_PREFIX = '$env:';
+
+function isLiteralSecret(value: string): boolean {
+  return !value.startsWith(ENV_REF_PREFIX);
+}
 
 function fileProvider(opts: GlobalOpts): FileContextProvider {
   return new FileContextProvider(opts.config, process.env);
@@ -22,18 +29,28 @@ export function contextCommand(): Command {
       const globalOpts = command.parent?.parent?.opts() as GlobalOpts;
       const provider = fileProvider(globalOpts);
       const tenant = String(cmdOpts.tenant);
-      const apiKey = cmdOpts.apiKey as string | undefined;
+      let apiKey = cmdOpts.apiKey as string | undefined;
       const clientId = cmdOpts.oauthClientId as string | undefined;
-      const clientSecret = cmdOpts.oauthClientSecret as string | undefined;
+      let clientSecret = cmdOpts.oauthClientSecret as string | undefined;
       const activate = cmdOpts.activate !== false;
 
+      if (!apiKey && !clientId && isInteractive()) {
+        apiKey = await promptSecret('API key');
+      } else if (clientId && !clientSecret && isInteractive()) {
+        clientSecret = await promptSecret('OAuth2 client secret');
+      }
+
       if (apiKey) {
+        if (isLiteralSecret(apiKey) && isInteractive()) warnLiteralSecret('--api-key');
         await provider.create(
           name,
           { tenant, auth: { type: 'api-key', key: apiKey } },
           activate,
         );
       } else if (clientId && clientSecret) {
+        if (isLiteralSecret(clientSecret) && isInteractive()) {
+          warnLiteralSecret('--oauth-client-secret');
+        }
         await provider.create(
           name,
           { tenant, auth: { type: 'oauth-m2m', clientId, clientSecret } },
