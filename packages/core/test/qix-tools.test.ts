@@ -538,6 +538,42 @@ describe('query', () => {
     expect(cubeDef.qDimensions?.[0]?.qDef?.qFieldLabels).toEqual(['Region']);
   });
 
+  test('falls back to qLibraryId when master dimension field definitions are unavailable', async () => {
+    let capturedDimension: Record<string, unknown> | undefined;
+    const doc = {
+      getDimensionList: async () => [
+        {
+          qInfo: { qId: 'D1' },
+          qMeta: { title: 'Region' },
+          qData: { dim: {} },
+        },
+      ],
+      createSessionObject: async (props: unknown) => {
+        const p = props as { qHyperCubeDef: { qDimensions: Array<Record<string, unknown>> } };
+        capturedDimension = p.qHyperCubeDef.qDimensions[0];
+        return {
+          getLayout: async () => ({ qHyperCube: { qSize: { qcx: 1, qcy: 0 }, qDataPages: [] } }),
+          getHyperCubeData: async () => [],
+        };
+      },
+    };
+
+    const out = await queryTool.run(
+      ctx,
+      {
+        appId: 'a1',
+        dimensions: [{ masterItemId: 'D1' }],
+        measures: ['Count([Region])'],
+        limit: 100,
+        offset: 0,
+      },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+
+    expect(out.headers[0]).toEqual({ name: 'Region', type: 'dimension' });
+    expect(capturedDimension).toEqual({ qLibraryId: 'D1' });
+  });
+
   test('resolves master measure by id and still applies set analysis', async () => {
     let capturedDef: string | undefined;
     const doc = {

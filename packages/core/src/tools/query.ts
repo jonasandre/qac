@@ -155,13 +155,17 @@ export const queryTool = defineTool({
       const obj = await doc.createSessionObject({
         qInfo: { qType: 'qac-query' },
         qHyperCubeDef: {
-          qDimensions: dimDefs.map((d) => ({
-            qDef: {
-              qFieldDefs: d.fieldDefs,
-              qFieldLabels: d.fieldLabels.length ? d.fieldLabels : [d.label],
-              ...(d.grouping ? { qGrouping: d.grouping } : {}),
-            },
-          })),
+          qDimensions: dimDefs.map((d) =>
+            d.libraryId
+              ? { qLibraryId: d.libraryId }
+              : {
+                  qDef: {
+                    qFieldDefs: d.fieldDefs ?? [],
+                    qFieldLabels: d.fieldLabels?.length ? d.fieldLabels : [d.label],
+                    ...(d.grouping ? { qGrouping: d.grouping } : {}),
+                  },
+                },
+          ),
           qMeasures: measDefs.map((m) =>
             m.libraryId
               ? { qLibraryId: m.libraryId }
@@ -212,9 +216,10 @@ export const queryTool = defineTool({
 });
 
 type NormalizedDimension = {
-  fieldDefs: string[];
-  fieldLabels: string[];
   label: string;
+  fieldDefs?: string[];
+  fieldLabels?: string[];
+  libraryId?: string;
   grouping?: string;
 };
 type NormalizedMeasure = { label: string; expression?: string; libraryId?: string };
@@ -268,22 +273,22 @@ function normalizeDimension(
         { masterItemId: d.masterItemId, itemType: 'dimension' },
       );
     }
+    const fallbackLabel =
+      d.label ??
+      master.fieldLabels?.[0] ??
+      master.title ??
+      (master.fieldDefs?.[0] ? stripBrackets(master.fieldDefs[0]) : d.masterItemId);
     if (!master.fieldDefs?.length) {
-      throw new QacError(
-        'INVALID_INPUT',
-        `Master dimension '${d.masterItemId}' has no field definition`,
-        {
-          masterItemId: d.masterItemId,
-          itemType: 'dimension',
-        },
-      );
+      return {
+        libraryId: d.masterItemId,
+        label: fallbackLabel,
+        ...(master.grouping ? { grouping: master.grouping } : {}),
+      };
     }
-    const primaryFieldDef = master.fieldDefs[0] ?? d.masterItemId;
-    const fallbackLabel = master.fieldLabels?.[0] ?? master.title ?? stripBrackets(primaryFieldDef);
     return {
       fieldDefs: master.fieldDefs,
       fieldLabels: master.fieldLabels?.length ? master.fieldLabels : [fallbackLabel],
-      label: d.label ?? fallbackLabel,
+      label: fallbackLabel,
       ...(master.grouping ? { grouping: master.grouping } : {}),
     };
   }
