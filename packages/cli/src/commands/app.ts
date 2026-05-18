@@ -1,12 +1,15 @@
-import { Command } from 'commander';
 import {
+  applyFiltersTool,
+  clearFiltersTool,
   describeFieldTool,
   evaluateTool,
+  getFiltersTool,
   listFieldsTool,
   listMasterItemsTool,
   listSheetsTool,
   queryTool,
 } from '@qac/core';
+import { Command } from 'commander';
 import type { GlobalOpts } from '../resolve-context.ts';
 import { runTool } from './tool-runner.ts';
 
@@ -37,7 +40,9 @@ export function appCommand(): Command {
   app
     .command('describe-field <appId> <field>')
     .description('Inspect a field: cardinality + sample values.')
-    .option('--sample-size <n>', 'Number of sample values (default 50)', (v) => Number.parseInt(v, 10))
+    .option('--sample-size <n>', 'Number of sample values (default 50)', (v) =>
+      Number.parseInt(v, 10),
+    )
     .action(async (appId, field, opts, command) => {
       await runTool(describeFieldTool, getGlobal(command), {
         appId,
@@ -67,6 +72,55 @@ export function appCommand(): Command {
       });
     });
 
+  const filter = new Command('filter').description(
+    'Apply, inspect, and clear Qlik app selections.',
+  );
+
+  filter
+    .command('apply <appId>')
+    .description('Apply reusable filters to the Qlik app selection state.')
+    .option('--filter <field=val,val>', 'Filter field=val[,val] (repeatable)', collect, [])
+    .option('--field <field>', 'Field to filter when using --value')
+    .option('--value <value>', 'Value for --field (repeatable)', collect, [])
+    .option('--mode <mode>', 'Selection mode: replace, add, or toggle (default replace)')
+    .action(async (appId, opts, command) => {
+      await runTool(applyFiltersTool, getGlobal(command), {
+        appId,
+        filters: parseFilterOptions(opts),
+        mode: opts.mode,
+      });
+    });
+
+  filter
+    .command('clear <appId>')
+    .description('Clear all selections, or specific fields when --field is provided.')
+    .option('--field <field>', 'Field to clear (repeatable)', collect, [])
+    .action(async (appId, opts, command) => {
+      const fields = opts.field as string[];
+      await runTool(clearFiltersTool, getGlobal(command), {
+        appId,
+        fields: fields.length ? fields : undefined,
+      });
+    });
+
+  filter
+    .command('get <appId>')
+    .description('Inspect current Qlik app selections.')
+    .option('--field <field>', 'Field to inspect (repeatable)', collect, [])
+    .option('--value-limit <n>', 'Max selected values per field (default 200)', (v) =>
+      Number.parseInt(v, 10),
+    )
+    .action(async (appId, opts, command) => {
+      const fields = opts.field as string[];
+      await runTool(getFiltersTool, getGlobal(command), {
+        appId,
+        fields: fields.length ? fields : undefined,
+        valueLimit: opts.valueLimit,
+      });
+    });
+
+  app.addCommand(filter);
+
   app
     .command('eval <appId>')
     .description('Evaluate a single expression and return its scalar value.')
@@ -89,6 +143,7 @@ function parseFilters(raw: string[]): Array<{ field: string; values: string[] }>
     if (eq <= 0) {
       throw new Error(`invalid --filter '${entry}', expected field=value[,value]`);
     }
+
     const field = entry.slice(0, eq);
     const values = entry
       .slice(eq + 1)
@@ -99,6 +154,20 @@ function parseFilters(raw: string[]): Array<{ field: string; values: string[] }>
   });
 }
 
+function parseFilterOptions(opts: {
+  filter: string[];
+  field?: string;
+  value: string[];
+}): Array<{ field: string; values: string[] }> {
+  if (opts.filter.length) return parseFilters(opts.filter) ?? [];
+  if (opts.field && opts.value.length) return [{ field: opts.field, values: opts.value }];
+  throw new Error(
+    'filter apply requires --filter field=value[,value] or --field with at least one --value',
+  );
+}
+
 function getGlobal(command: Command): GlobalOpts {
-  return command.parent?.parent?.opts() as GlobalOpts;
+  let current: Command = command;
+  while (current.parent) current = current.parent;
+  return current.opts() as GlobalOpts;
 }

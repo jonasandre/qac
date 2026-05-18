@@ -6,13 +6,52 @@ export type QixDoc = {
   getDimensionList: () => Promise<unknown[]>;
   getMeasureList: () => Promise<unknown[]>;
   getSheetList: () => Promise<unknown[]>;
-  getField: (name: string) => Promise<{ getCardinal: () => Promise<number> }>;
+  getField: (name: string) => Promise<QixField>;
+  clearAll?: (lockedAlso?: boolean, stateName?: string) => Promise<boolean | undefined>;
   evaluate: (expression: string) => Promise<string>;
-  evaluateEx: (expression: string) => Promise<{ qNum?: number; qText?: string; qIsNumeric?: boolean }>;
+  evaluateEx: (
+    expression: string,
+  ) => Promise<{ qNum?: number; qText?: string; qIsNumeric?: boolean }>;
   createSessionObject: (props: unknown) => Promise<{
     getLayout: () => Promise<unknown>;
     getHyperCubeData: (path: string, pages: NxPage[]) => Promise<NxDataPage[]>;
+    getListObjectData?: (path: string, pages: NxPage[]) => Promise<NxDataPage[]>;
   }>;
+};
+
+export type QixField = {
+  getCardinal: () => Promise<number>;
+  selectValues?: (
+    values: QixFieldValue[],
+    toggleMode?: boolean,
+    softLock?: boolean,
+  ) => Promise<boolean | undefined>;
+  clear?: () => Promise<boolean | undefined>;
+};
+
+export type QixFieldValue = {
+  qText?: string;
+  qIsNumeric?: boolean;
+  qNumber?: number;
+};
+
+export type QixStateCounts = {
+  qSelected?: number;
+  qLocked?: number;
+  qOption?: number;
+  qDeselected?: number;
+  qAlternative?: number;
+  qExcluded?: number;
+  qSelectedExcluded?: number;
+  qLockedExcluded?: number;
+};
+
+export type QixSelectionSummary = {
+  qField: string;
+  qSelected?: string;
+  qSelectedCount?: number;
+  qTotal?: number;
+  qStateCounts?: QixStateCounts;
 };
 
 export type NxPage = { qLeft: number; qTop: number; qWidth: number; qHeight: number };

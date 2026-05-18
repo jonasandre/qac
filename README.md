@@ -13,16 +13,18 @@ focused specifically on analytical data extraction.
 
 - **Dual surface** — same tool set exposed as both a CLI (`qac <command>`) and
   an MCP server (`qac mcp`).
-- **Curated tools** — 10 well-documented tools covering discovery (apps,
+- **Curated tools** — 13 well-documented tools covering discovery (apps,
   spaces, catalog), introspection (fields, master items, sheets, field
-  description) and querying (hypercube, scalar evaluate).
+  description), selections (apply/inspect/clear filters), and querying
+  (hypercube, scalar evaluate).
 - **Multi-tenant contexts** — `qac context create|use|ls|...` model mirroring
   `qlik-cli`. Active context is used by default; per-call override via
   `--context` flag or MCP `context` parameter.
 - **Deterministic JSON output** — `{ok, data}` on success, `{ok, error}` on
   failure, distinct exit codes for usage/exec/auth errors.
-- **Stateless** — each QIX call opens a fresh WebSocket session and closes it
-  in a `finally` block. No daemon, no shared state.
+- **No daemon** — each QIX call opens a fresh WebSocket session and closes it
+  in a `finally` block; Qlik app selections can still be applied and reused by
+  the same user/app selection state.
 - **AGPL-3.0** licensed.
 
 ## Install
@@ -203,11 +205,13 @@ qac app fields <appId>
 qac app master-items <appId>
 qac app sheets <appId>
 qac app describe-field <appId> Region --sample-size 100
+qac app filter apply <appId> --filter "Year=2024,2025"
 qac app query <appId> \
   --dim "[Region]" \
   --measure "Sum([Sales])" \
-  --filter "Year=2024,2025" \
   --limit 100
+qac app filter get <appId>
+qac app filter clear <appId>
 qac app eval <appId> --expr "Sum([Sales])"
 ```
 
@@ -341,7 +345,7 @@ the single argument:
 npx @modelcontextprotocol/inspector qac mcp
 ```
 
-Opens a local web UI that connects to `qac mcp` over stdio, lists the 11
+Opens a local web UI that connects to `qac mcp` over stdio, lists the 14
 tools, and lets you invoke each one with form-validated arguments — useful
 to confirm everything works before plugging into a real LLM client.
 
@@ -363,9 +367,17 @@ are available.
 | `list_master_items` | QIX   | Master dimensions + measures (prefer these).      |
 | `list_sheets`       | QIX   | Sheets in the app.                                |
 | `describe_field`    | QIX   | Cardinality + sample values for one field.        |
+| `apply_filters`     | QIX   | Apply reusable app selections.                    |
+| `clear_filters`     | QIX   | Clear all selections or selected fields.          |
+| `get_filters`       | QIX   | Inspect current app selections.                   |
 | `query`             | QIX   | Run a hypercube query (rows × dim/measure).       |
 | `evaluate`          | QIX   | Evaluate a single expression and return a scalar. |
 | `list_contexts`     | local | List configured tenant contexts (MCP only).       |
+
+Recommended MCP workflow for filtered analysis: use `list_fields` and
+`describe_field` to discover valid fields/values, call `apply_filters`, run
+`query` or `evaluate`, then call `clear_filters` when the filtered analysis is
+done. `query.filters` remains available for one-shot filters.
 
 ## Development
 

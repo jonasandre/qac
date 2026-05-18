@@ -1,13 +1,19 @@
 import { describe, expect, test } from 'bun:test';
+import type { QixAppHandle, QixSessionManager } from '../src/session/manager.ts';
+import { describeFieldTool } from '../src/tools/describe-field.ts';
+import { evaluateInput, evaluateTool } from '../src/tools/evaluate.ts';
+import {
+  applyFiltersInput,
+  applyFiltersTool,
+  clearFiltersTool,
+  getFiltersTool,
+} from '../src/tools/filters.ts';
 import { listFieldsTool } from '../src/tools/list-fields.ts';
 import { listMasterItemsTool } from '../src/tools/list-master-items.ts';
 import { listSheetsTool } from '../src/tools/list-sheets.ts';
-import { describeFieldTool } from '../src/tools/describe-field.ts';
 import { queryInput, queryTool } from '../src/tools/query.ts';
-import { evaluateInput, evaluateTool } from '../src/tools/evaluate.ts';
-import { NoopUsageRecorder } from '../src/usage.ts';
-import type { QixAppHandle, QixSessionManager } from '../src/session/manager.ts';
 import type { QlikContext } from '../src/types.ts';
+import { NoopUsageRecorder } from '../src/usage.ts';
 
 const ctx: QlikContext = {
   name: 'test',
@@ -17,7 +23,11 @@ const ctx: QlikContext = {
 
 function makeSession(doc: unknown): QixSessionManager {
   return {
-    async withApp<T>(_ctx: QlikContext, appId: string, fn: (h: QixAppHandle) => Promise<T>): Promise<T> {
+    async withApp<T>(
+      _ctx: QlikContext,
+      appId: string,
+      fn: (h: QixAppHandle) => Promise<T>,
+    ): Promise<T> {
       return fn({ doc, appId });
     },
   };
@@ -37,8 +47,24 @@ describe('list_fields', () => {
       { qix: makeSession(doc), usage: new NoopUsageRecorder() },
     );
     expect(out.fields).toEqual([
-      { name: 'Region', tags: ['$ascii'], isSystem: false, isHidden: undefined, isSemantic: undefined, cardinal: 5, srcTables: undefined },
-      { name: 'Sales', tags: ['$numeric'], isSystem: false, isHidden: undefined, isSemantic: undefined, cardinal: 1000, srcTables: undefined },
+      {
+        name: 'Region',
+        tags: ['$ascii'],
+        isSystem: false,
+        isHidden: undefined,
+        isSemantic: undefined,
+        cardinal: 5,
+        srcTables: undefined,
+      },
+      {
+        name: 'Sales',
+        tags: ['$numeric'],
+        isSystem: false,
+        isHidden: undefined,
+        isSemantic: undefined,
+        cardinal: 1000,
+        srcTables: undefined,
+      },
     ]);
   });
 });
@@ -146,7 +172,10 @@ describe('describe_field', () => {
       getField: async () => {
         throw new Error('no such field');
       },
-      createSessionObject: async () => ({ getLayout: async () => ({}), getHyperCubeData: async () => [] }),
+      createSessionObject: async () => ({
+        getLayout: async () => ({}),
+        getHyperCubeData: async () => [],
+      }),
     };
     await expect(
       describeFieldTool.run(
@@ -155,6 +184,234 @@ describe('describe_field', () => {
         { qix: makeSession(doc), usage: new NoopUsageRecorder() },
       ),
     ).rejects.toMatchObject({ code: 'FIELD_NOT_FOUND' });
+  });
+});
+
+describe('filters', () => {
+  test('apply_filters selects text and numeric values', async () => {
+    const selectedCalls: Array<{ values: unknown[]; toggle?: boolean; softLock?: boolean }> = [];
+    const doc = {
+      getField: async (_name: string) => ({
+        getCardinal: async () => 10,
+        selectValues: async (values: unknown[], toggle?: boolean, softLock?: boolean) => {
+          selectedCalls.push({ values, toggle, softLock });
+          return true;
+        },
+      }),
+      createSessionObject: async (props: unknown) => {
+        const p = props as Record<string, unknown>;
+        return {
+          getLayout: async () => {
+            if (p.qSelectionObjectDef) {
+              return {
+                qSelectionObject: {
+                  qSelections: [
+                    { qField: 'Region', qSelected: 'EU, 2025', qSelectedCount: 2, qTotal: 10 },
+                  ],
+                },
+              };
+            }
+            return {
+              qListObject: {
+                qSize: { qcy: 10 },
+                qDimensionInfo: { qStateCounts: { qSelected: 2, qOption: 8 } },
+                qDataPages: [
+                  {
+                    qMatrix: [
+                      [{ qText: 'EU', qState: 'S' }],
+                      [{ qText: '2025', qNum: 2025, qState: 'S' }],
+                      [{ qText: 'US', qState: 'O' }],
+                    ],
+                  },
+                ],
+              },
+            };
+          },
+          getHyperCubeData: async () => [],
+        };
+      },
+    };
+
+    const out = await applyFiltersTool.run(
+      ctx,
+      {
+        appId: 'a1',
+        filters: [{ field: 'Region', values: ['EU', 2025] }],
+        mode: 'replace',
+        softLock: false,
+      },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+
+    expect(selectedCalls).toEqual([
+      {
+        values: [
+          { qText: 'EU', qIsNumeric: false },
+          { qText: '2025', qIsNumeric: true, qNumber: 2025 },
+        ],
+        toggle: false,
+        softLock: false,
+      },
+    ]);
+    expect(out.selections[0]).toMatchObject({
+      field: 'Region',
+      selected: 'EU, 2025',
+      selectedCount: 2,
+      values: [
+        { value: 'EU', state: 'S' },
+        { value: '2025', numeric: 2025, state: 'S' },
+      ],
+    });
+  });
+
+  test('apply_filters add mode only toggles missing values', async () => {
+    const selectedCalls: Array<{ values: unknown[]; toggle?: boolean }> = [];
+    const doc = {
+      getField: async () => ({
+        getCardinal: async () => 10,
+        selectValues: async (values: unknown[], toggle?: boolean) => {
+          selectedCalls.push({ values, toggle });
+        },
+      }),
+      createSessionObject: async () => ({
+        getLayout: async () => ({
+          qListObject: {
+            qSize: { qcy: 10 },
+            qDimensionInfo: { qStateCounts: { qSelected: 1 } },
+            qDataPages: [
+              {
+                qMatrix: [[{ qText: 'EU', qState: 'S' }], [{ qText: 'US', qState: 'O' }]],
+              },
+            ],
+          },
+        }),
+        getHyperCubeData: async () => [],
+      }),
+    };
+
+    await applyFiltersTool.run(
+      ctx,
+      {
+        appId: 'a1',
+        filters: [{ field: 'Region', values: ['EU', 'US'] }],
+        mode: 'add',
+        softLock: false,
+      },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+
+    expect(selectedCalls).toEqual([{ values: [{ qText: 'US', qIsNumeric: false }], toggle: true }]);
+  });
+
+  test('clear_filters clears all selections or selected fields', async () => {
+    let clearAllCalled = false;
+    const clearedFields: string[] = [];
+    const doc = {
+      clearAll: async () => {
+        clearAllCalled = true;
+      },
+      getField: async (name: string) => ({
+        getCardinal: async () => 10,
+        clear: async () => {
+          clearedFields.push(name);
+        },
+      }),
+    };
+
+    await clearFiltersTool.run(
+      ctx,
+      { appId: 'a1' },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+    await clearFiltersTool.run(
+      ctx,
+      { appId: 'a1', fields: ['Region', 'Year'] },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+
+    expect(clearAllCalled).toBe(true);
+    expect(clearedFields).toEqual(['Region', 'Year']);
+  });
+
+  test('get_filters returns selected values from current selections', async () => {
+    const doc = {
+      getField: async () => ({ getCardinal: async () => 10 }),
+      createSessionObject: async (props: unknown) => {
+        const p = props as Record<string, unknown>;
+        return {
+          getLayout: async () => {
+            if (p.qSelectionObjectDef) {
+              return {
+                qSelectionObject: {
+                  qSelections: [
+                    { qField: 'Region', qSelected: 'EU', qSelectedCount: 1, qTotal: 10 },
+                  ],
+                },
+              };
+            }
+            return {
+              qListObject: {
+                qSize: { qcy: 10 },
+                qDimensionInfo: { qStateCounts: { qSelected: 1, qOption: 9 } },
+                qDataPages: [
+                  { qMatrix: [[{ qText: 'EU', qState: 'S' }], [{ qText: 'US', qState: 'O' }]] },
+                ],
+              },
+            };
+          },
+          getHyperCubeData: async () => [],
+        };
+      },
+    };
+
+    const out = await getFiltersTool.run(
+      ctx,
+      { appId: 'a1', valueLimit: 10 },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+
+    expect(out.selections).toEqual([
+      {
+        field: 'Region',
+        selected: 'EU',
+        selectedCount: 1,
+        totalCount: 10,
+        values: [{ value: 'EU', state: 'S' }],
+        truncated: false,
+        stateCounts: { qSelected: 1, qOption: 9 },
+      },
+    ]);
+  });
+
+  test('apply_filters rejects empty value lists', async () => {
+    const doc = {
+      getField: async () => ({ getCardinal: async () => 10 }),
+      createSessionObject: async () => ({
+        getLayout: async () => ({}),
+        getHyperCubeData: async () => [],
+      }),
+    };
+    await expect(
+      applyFiltersTool.run(
+        ctx,
+        {
+          appId: 'a1',
+          filters: [{ field: 'Region', values: [] }],
+          mode: 'replace',
+          softLock: false,
+        },
+        { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
+  test('apply_filters schema rejects oversize filter values', () => {
+    const values = Array.from({ length: 1001 }, (_, i) => `v${i}`);
+    const result = applyFiltersInput.safeParse({
+      appId: 'a1',
+      filters: [{ field: 'F', values }],
+    });
+    expect(result.success).toBe(false);
   });
 });
 
@@ -243,7 +500,12 @@ describe('query', () => {
   });
 
   test('rejects when no dim and no measure', async () => {
-    const doc = { createSessionObject: async () => ({ getLayout: async () => ({}), getHyperCubeData: async () => [] }) };
+    const doc = {
+      createSessionObject: async () => ({
+        getLayout: async () => ({}),
+        getHyperCubeData: async () => [],
+      }),
+    };
     await expect(
       queryTool.run(
         ctx,
@@ -303,7 +565,12 @@ describe('query', () => {
   });
 
   test('rejects malformed raw setExpression', async () => {
-    const doc = { createSessionObject: async () => ({ getLayout: async () => ({}), getHyperCubeData: async () => [] }) };
+    const doc = {
+      createSessionObject: async () => ({
+        getLayout: async () => ({}),
+        getHyperCubeData: async () => [],
+      }),
+    };
     await expect(
       queryTool.run(
         ctx,

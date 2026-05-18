@@ -5,7 +5,10 @@ import { join } from 'node:path';
 
 const CLI = join(import.meta.dir, '..', 'src', 'index.ts');
 
-async function runCli(args: string[], env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exit: number }> {
+async function runCli(
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; exit: number }> {
   const proc = Bun.spawn(['bun', 'run', CLI, ...args], {
     env: { ...process.env, ...env },
     stdout: 'pipe',
@@ -112,5 +115,11 @@ describe('CLI smoke', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test('filter apply without filter values exits 2', async () => {
+    const res = await runCli(['app', 'filter', 'apply', 'app-id']);
+    expect(res.exit).toBe(2);
+    expect(res.stderr).toContain('filter apply requires');
   });
 });

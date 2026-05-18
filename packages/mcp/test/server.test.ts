@@ -4,15 +4,18 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import {
   type ContextProvider,
   type ContextSummary,
-  type QixSessionManager,
-  type QixAppHandle,
-  type QlikContext,
   NoopUsageRecorder,
+  type QixAppHandle,
+  type QixSessionManager,
+  type QlikContext,
 } from '@qac/core';
 import { buildMcpServer } from '../src/server.ts';
 
 class FakeProvider implements ContextProvider {
-  constructor(private readonly contexts: Record<string, QlikContext>, private readonly activeName: string | null) {}
+  constructor(
+    private readonly contexts: Record<string, QlikContext>,
+    private readonly activeName: string | null,
+  ) {}
   async resolve(name?: string): Promise<QlikContext> {
     const target = name ?? this.activeName;
     if (!target) throw new Error('no active context');
@@ -35,7 +38,11 @@ class FakeProvider implements ContextProvider {
 
 class FakeQix implements QixSessionManager {
   constructor(private readonly docFactory: (appId: string) => unknown) {}
-  async withApp<T>(_ctx: QlikContext, appId: string, fn: (h: QixAppHandle) => Promise<T>): Promise<T> {
+  async withApp<T>(
+    _ctx: QlikContext,
+    appId: string,
+    fn: (h: QixAppHandle) => Promise<T>,
+  ): Promise<T> {
     return fn({ doc: this.docFactory(appId), appId });
   }
 }
@@ -57,7 +64,7 @@ async function connectClient(opts: {
 }
 
 describe('MCP server', () => {
-  test('lists all 11 tools (10 core + list_contexts)', async () => {
+  test('lists all 14 tools (13 core + list_contexts)', async () => {
     const provider = new FakeProvider({}, null);
     const qix = new FakeQix(() => ({}));
     const client = await connectClient({ provider, qix });
@@ -66,8 +73,11 @@ describe('MCP server', () => {
     const names = tools.tools.map((t) => t.name).sort();
     expect(names).toEqual(
       [
+        'apply_filters',
+        'clear_filters',
         'describe_field',
         'evaluate',
+        'get_filters',
         'get_app',
         'list_apps',
         'list_contexts',
@@ -93,7 +103,7 @@ describe('MCP server', () => {
     const client = await connectClient({ provider, qix });
 
     const res = await client.callTool({ name: 'list_contexts', arguments: {} });
-    const payload = JSON.parse(((res.content as Array<{ text: string }>)?.[0]?.text) ?? '{}');
+    const payload = JSON.parse((res.content as Array<{ text: string }>)?.[0]?.text ?? '{}');
     expect(payload.active).toBe('prod');
     expect(payload.contexts).toHaveLength(1);
     expect(payload.contexts[0].name).toBe('prod');
@@ -135,7 +145,7 @@ describe('MCP server', () => {
 
     const res = await client.callTool({ name: 'list_fields', arguments: { appId: 'a1' } });
     expect(res.isError).toBe(true);
-    const payload = JSON.parse(((res.content as Array<{ text: string }>)?.[0]?.text) ?? '{}');
+    const payload = JSON.parse((res.content as Array<{ text: string }>)?.[0]?.text ?? '{}');
     expect(payload.ok).toBe(false);
     expect(payload.error).toBeDefined();
     await client.close();

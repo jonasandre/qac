@@ -45,6 +45,25 @@ export type { ListSheetsInput, ListSheetsOutput } from './tools/list-sheets.ts';
 export { describeFieldTool, describeFieldInput } from './tools/describe-field.ts';
 export type { DescribeFieldInput, DescribeFieldOutput } from './tools/describe-field.ts';
 
+export {
+  applyFiltersTool,
+  applyFiltersInput,
+  clearFiltersTool,
+  clearFiltersInput,
+  getFiltersTool,
+  getFiltersInput,
+} from './tools/filters.ts';
+export type {
+  ApplyFiltersInput,
+  ApplyFiltersOutput,
+  ClearFiltersInput,
+  ClearFiltersOutput,
+  FieldSelection,
+  GetFiltersInput,
+  GetFiltersOutput,
+  SelectionValue,
+} from './tools/filters.ts';
+
 export { queryTool, queryInput } from './tools/query.ts';
 export type { QueryInput, QueryOutput, QueryRow } from './tools/query.ts';
 

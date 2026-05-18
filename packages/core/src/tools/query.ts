@@ -1,58 +1,41 @@
 import { z } from 'zod';
 import { QacError } from '../errors.ts';
+import { FILTER_LIMITS, filterSchema } from './filter-schema.ts';
+import { type NxDataPage, asDoc } from './qix-helpers.ts';
 import { defineTool } from './tool.ts';
-import { asDoc, type NxDataPage } from './qix-helpers.ts';
-
-// All limits sized to comfortably exceed real dashboard queries while
-// blocking megabyte-scale payloads / DoS via the MCP/CLI surface.
-const LIMITS = {
-  arrayDimensions: 50,
-  arrayMeasures: 50,
-  arrayFilters: 50,
-  arrayFilterValues: 1000,
-  arraySort: 10,
-  stringField: 256,
-  stringValue: 256,
-  stringExpression: 5000,
-} as const;
 
 const dimensionSchema = z.union([
-  z.string().max(LIMITS.stringExpression).describe('Field name (will be bracketed) or expression.'),
+  z
+    .string()
+    .max(FILTER_LIMITS.stringExpression)
+    .describe('Field name (will be bracketed) or expression.'),
   z.object({
     field: z
       .string()
-      .max(LIMITS.stringExpression)
+      .max(FILTER_LIMITS.stringExpression)
       .describe('Field name or expression for the dimension.'),
     label: z
       .string()
-      .max(LIMITS.stringField)
+      .max(FILTER_LIMITS.stringField)
       .optional()
       .describe('Display label for the dimension column.'),
   }),
 ]);
 
 const measureSchema = z.union([
-  z.string().max(LIMITS.stringExpression).describe('Expression, e.g. `Sum([Sales])`.'),
+  z.string().max(FILTER_LIMITS.stringExpression).describe('Expression, e.g. `Sum([Sales])`.'),
   z.object({
     expression: z
       .string()
-      .max(LIMITS.stringExpression)
+      .max(FILTER_LIMITS.stringExpression)
       .describe('Aggregation expression, e.g. `Sum([Sales])`.'),
     label: z
       .string()
-      .max(LIMITS.stringField)
+      .max(FILTER_LIMITS.stringField)
       .optional()
       .describe('Display label for the measure column.'),
   }),
 ]);
-
-const filterSchema = z.object({
-  field: z.string().max(LIMITS.stringField).describe('Field name to filter on.'),
-  values: z
-    .array(z.union([z.string().max(LIMITS.stringValue), z.number()]))
-    .max(LIMITS.arrayFilterValues)
-    .describe('Values to keep.'),
-});
 
 const sortSchema = z.object({
   column: z.number().int().min(0).describe('0-based column index in the result.'),
@@ -61,18 +44,18 @@ const sortSchema = z.object({
 
 export const queryInput = z.object({
   appId: z.string().min(1),
-  dimensions: z.array(dimensionSchema).max(LIMITS.arrayDimensions).default([]),
-  measures: z.array(measureSchema).max(LIMITS.arrayMeasures).default([]),
-  filters: z.array(filterSchema).max(LIMITS.arrayFilters).optional(),
+  dimensions: z.array(dimensionSchema).max(FILTER_LIMITS.arrayDimensions).default([]),
+  measures: z.array(measureSchema).max(FILTER_LIMITS.arrayMeasures).default([]),
+  filters: z.array(filterSchema).max(FILTER_LIMITS.arrayFilters).optional(),
   setExpression: z
     .string()
-    .max(LIMITS.stringExpression)
+    .max(FILTER_LIMITS.stringExpression)
     .optional()
     .describe(
       'Optional Qlik set analysis modifier applied to all measures, e.g. `{<Year={"2025"}>}`. ' +
         'Use for advanced filtering that cannot be expressed via `filters`.',
     ),
-  sort: z.array(sortSchema).max(LIMITS.arraySort).optional(),
+  sort: z.array(sortSchema).max(FILTER_LIMITS.arraySort).optional(),
   limit: z.number().int().min(1).max(10000).optional().default(1000),
   offset: z.number().int().min(0).optional().default(0),
 });
@@ -93,7 +76,8 @@ export const queryTool = defineTool({
   description:
     'Execute an analytical query against a Qlik app. Returns a tabular result with the given dimensions ' +
     'and measures. Prefer master items (via `list_master_items`) over inventing your own measure expressions. ' +
-    'Filter syntax: `filters: [{field: "Region", values: ["EU", "US"]}]`. For advanced set analysis, use ' +
+    'For reusable app selections, call `apply_filters` before `query`. For one-shot filters, use ' +
+    '`filters: [{field: "Region", values: ["EU", "US"]}]`. For advanced set analysis, use ' +
     '`setExpression` (e.g. `{<Year={"2025"}>}`). Always set a `limit` (default 1000, max 10000); the ' +
     'response includes `totalRows` and `truncated` so you can paginate via `offset` if needed.',
   input: queryInput,
@@ -183,7 +167,7 @@ function normalizeMeasure(
 ): NormalizedMeasure {
   const raw = typeof m === 'string' ? m : m.expression;
   const expression = applySetExpression(raw, setExpression);
-  const label = typeof m === 'string' ? m : m.label ?? m.expression;
+  const label = typeof m === 'string' ? m : (m.label ?? m.expression);
   return { expression, label };
 }
 
@@ -236,10 +220,7 @@ function stripBrackets(input: string): string {
   return input.replace(/^\[/, '').replace(/\]$/, '');
 }
 
-function buildInterColumnSort(
-  width: number,
-  sort: QueryInput['sort'],
-): number[] | undefined {
+function buildInterColumnSort(width: number, sort: QueryInput['sort']): number[] | undefined {
   if (!sort || !sort.length) return undefined;
   const base = Array.from({ length: width }, (_, i) => i);
   // Move sorted columns to front.
@@ -255,7 +236,11 @@ function collectRows(pages: NxDataPage[], target: QueryRow[]): void {
       target.push(
         row.map((cell): string | number | null => {
           if (cell.qText && cell.qText !== '-') {
-            if (typeof cell.qNum === 'number' && Number.isFinite(cell.qNum) && cell.qText === String(cell.qNum)) {
+            if (
+              typeof cell.qNum === 'number' &&
+              Number.isFinite(cell.qNum) &&
+              cell.qText === String(cell.qNum)
+            ) {
               return cell.qNum;
             }
             return cell.qText;

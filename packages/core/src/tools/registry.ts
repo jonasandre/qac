@@ -1,5 +1,6 @@
 import { describeFieldTool } from './describe-field.ts';
 import { evaluateTool } from './evaluate.ts';
+import { applyFiltersTool, clearFiltersTool, getFiltersTool } from './filters.ts';
 import { getAppTool } from './get-app.ts';
 import { listAppsTool } from './list-apps.ts';
 import { listFieldsTool } from './list-fields.ts';
@@ -19,6 +20,9 @@ export const allTools = [
   listMasterItemsTool,
   listSheetsTool,
   describeFieldTool,
+  applyFiltersTool,
+  clearFiltersTool,
+  getFiltersTool,
   queryTool,
   evaluateTool,
 ] as const;
