@@ -162,9 +162,11 @@ export const queryTool = defineTool({
               ...(d.grouping ? { qGrouping: d.grouping } : {}),
             },
           })),
-          qMeasures: measDefs.map((m) => ({
-            qDef: { qDef: m.expression, qLabel: m.label },
-          })),
+          qMeasures: measDefs.map((m) =>
+            m.libraryId
+              ? { qLibraryId: m.libraryId }
+              : { qDef: { qDef: m.expression, qLabel: m.label } },
+          ),
           qSuppressZero: false,
           qSuppressMissing: false,
           qInitialDataFetch: [
@@ -215,7 +217,7 @@ type NormalizedDimension = {
   label: string;
   grouping?: string;
 };
-type NormalizedMeasure = { expression: string; label: string };
+type NormalizedMeasure = { label: string; expression?: string; libraryId?: string };
 
 type QueryDimension = z.infer<typeof dimensionSchema>;
 type QueryMeasure = z.infer<typeof measureSchema>;
@@ -300,17 +302,29 @@ function normalizeMeasure(
   setExpression: string | undefined,
   masterMap: Map<string, MasterMeasureEntry> | undefined,
 ): NormalizedMeasure {
-  const raw = resolveMeasureExpression(m, masterMap);
-  const expression = applySetExpression(raw, setExpression);
-  const label = resolveMeasureLabel(m, raw, masterMap);
-  return { expression, label };
+  const resolved = resolveMeasureReference(m, masterMap, setExpression);
+  if (resolved.expression) {
+    return {
+      expression: applySetExpression(resolved.expression, setExpression),
+      label: resolveMeasureLabel(m, resolved.label ?? resolved.expression, masterMap),
+    };
+  }
+  return {
+    libraryId: resolved.libraryId,
+    label: resolveMeasureLabel(
+      m,
+      resolved.label ?? resolved.libraryId ?? 'master measure',
+      masterMap,
+    ),
+  };
 }
 
-function resolveMeasureExpression(
+function resolveMeasureReference(
   m: QueryMeasure,
   masterMap: Map<string, MasterMeasureEntry> | undefined,
-): string {
-  if (typeof m === 'string') return m;
+  setExpression: string | undefined,
+) {
+  if (typeof m === 'string') return { expression: m, label: m };
   if (hasMeasureMasterItemId(m)) {
     const master = masterMap?.get(m.masterItemId);
     if (!master) {
@@ -320,13 +334,20 @@ function resolveMeasureExpression(
         { masterItemId: m.masterItemId, itemType: 'measure' },
       );
     }
-    if (!master.expression) {
-      throw new QacError('INVALID_INPUT', `Master measure '${m.masterItemId}' has no expression`, {
-        masterItemId: m.masterItemId,
-        itemType: 'measure',
-      });
+    if (master.expression) {
+      return { expression: master.expression, label: m.label ?? master.label ?? master.title };
     }
-    return master.expression;
+    if (setExpression) {
+      throw new QacError(
+        'INVALID_INPUT',
+        `Master measure '${m.masterItemId}' has no inline expression available for query.filters/setExpression. Use apply_filters first or query the master measure without one-shot set analysis.`,
+        {
+          masterItemId: m.masterItemId,
+          itemType: 'measure',
+        },
+      );
+    }
+    return { libraryId: m.masterItemId, label: m.label ?? master.label ?? master.title };
   }
   if (!hasMeasureExpression(m)) {
     throw new QacError(
@@ -334,7 +355,7 @@ function resolveMeasureExpression(
       'Measure objects must include exactly one of `expression` or `masterItemId`',
     );
   }
-  return m.expression;
+  return { expression: m.expression, label: m.label ?? m.expression };
 }
 
 function resolveMeasureLabel(

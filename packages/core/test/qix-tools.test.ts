@@ -575,6 +575,76 @@ describe('query', () => {
     expect(capturedDef).toContain("Sum({<[Region]={'EU'}>} [Sales])");
   });
 
+  test('falls back to qLibraryId when master measure expression is unavailable', async () => {
+    let capturedMeasure: Record<string, unknown> | undefined;
+    const doc = {
+      getMeasureList: async () => [
+        {
+          qInfo: { qId: 'M1' },
+          qMeta: { title: 'Sales' },
+          qData: { measure: { qLabel: 'Sales' } },
+        },
+      ],
+      createSessionObject: async (props: unknown) => {
+        const p = props as { qHyperCubeDef: { qMeasures: Array<Record<string, unknown>> } };
+        capturedMeasure = p.qHyperCubeDef.qMeasures[0];
+        return {
+          getLayout: async () => ({ qHyperCube: { qSize: { qcx: 1, qcy: 0 }, qDataPages: [] } }),
+          getHyperCubeData: async () => [],
+        };
+      },
+    };
+
+    const out = await queryTool.run(
+      ctx,
+      {
+        appId: 'a1',
+        dimensions: [],
+        measures: [{ masterItemId: 'M1' }],
+        limit: 100,
+        offset: 0,
+      },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+
+    expect(out.headers[0]).toEqual({ name: 'Sales', type: 'measure' });
+    expect(capturedMeasure).toEqual({ qLibraryId: 'M1' });
+  });
+
+  test('rejects one-shot set analysis when master measure has no inline expression', async () => {
+    const doc = {
+      getMeasureList: async () => [
+        {
+          qInfo: { qId: 'M1' },
+          qMeta: { title: 'Sales' },
+          qData: { measure: { qLabel: 'Sales' } },
+        },
+      ],
+      createSessionObject: async () => ({
+        getLayout: async () => ({ qHyperCube: { qSize: { qcx: 1, qcy: 0 }, qDataPages: [] } }),
+        getHyperCubeData: async () => [],
+      }),
+    };
+
+    await expect(
+      queryTool.run(
+        ctx,
+        {
+          appId: 'a1',
+          dimensions: [],
+          measures: [{ masterItemId: 'M1' }],
+          filters: [{ field: 'Region', values: ['EU'] }],
+          limit: 100,
+          offset: 0,
+        },
+        { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+      ),
+    ).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+      details: { masterItemId: 'M1', itemType: 'measure' },
+    });
+  });
+
   test('rejects unknown master item ids', async () => {
     const doc = {
       getMeasureList: async () => [],
