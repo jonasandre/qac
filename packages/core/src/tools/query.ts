@@ -4,37 +4,72 @@ import { FILTER_LIMITS, filterSchema } from './filter-schema.ts';
 import { type NxDataPage, asDoc } from './qix-helpers.ts';
 import { defineTool } from './tool.ts';
 
+const dimensionInlineSchema = z.object({
+  field: z
+    .string()
+    .max(FILTER_LIMITS.stringExpression)
+    .describe('Inline field name or expression for the dimension. Not a master item title.'),
+  label: z
+    .string()
+    .max(FILTER_LIMITS.stringField)
+    .optional()
+    .describe('Display label for the dimension column.'),
+});
+
+const dimensionMasterItemSchema = z.object({
+  masterItemId: z
+    .string()
+    .min(1)
+    .max(FILTER_LIMITS.stringField)
+    .describe('Master dimension ID from `list_master_items`. Use the `id`, not the title/name.'),
+  label: z
+    .string()
+    .max(FILTER_LIMITS.stringField)
+    .optional()
+    .describe('Optional display label override for the dimension column.'),
+});
+
 const dimensionSchema = z.union([
   z
     .string()
     .max(FILTER_LIMITS.stringExpression)
-    .describe('Field name (will be bracketed) or expression.'),
-  z.object({
-    field: z
-      .string()
-      .max(FILTER_LIMITS.stringExpression)
-      .describe('Field name or expression for the dimension.'),
-    label: z
-      .string()
-      .max(FILTER_LIMITS.stringField)
-      .optional()
-      .describe('Display label for the dimension column.'),
-  }),
+    .describe('Inline field name (will be bracketed) or expression. Not a master item title.'),
+  dimensionInlineSchema,
+  dimensionMasterItemSchema,
 ]);
 
+const measureInlineSchema = z.object({
+  expression: z
+    .string()
+    .max(FILTER_LIMITS.stringExpression)
+    .describe('Inline aggregation expression, e.g. `Sum([Sales])`. Not a master item title.'),
+  label: z
+    .string()
+    .max(FILTER_LIMITS.stringField)
+    .optional()
+    .describe('Display label for the measure column.'),
+});
+
+const measureMasterItemSchema = z.object({
+  masterItemId: z
+    .string()
+    .min(1)
+    .max(FILTER_LIMITS.stringField)
+    .describe('Master measure ID from `list_master_items`. Use the `id`, not the title/name.'),
+  label: z
+    .string()
+    .max(FILTER_LIMITS.stringField)
+    .optional()
+    .describe('Optional display label override for the measure column.'),
+});
+
 const measureSchema = z.union([
-  z.string().max(FILTER_LIMITS.stringExpression).describe('Expression, e.g. `Sum([Sales])`.'),
-  z.object({
-    expression: z
-      .string()
-      .max(FILTER_LIMITS.stringExpression)
-      .describe('Aggregation expression, e.g. `Sum([Sales])`.'),
-    label: z
-      .string()
-      .max(FILTER_LIMITS.stringField)
-      .optional()
-      .describe('Display label for the measure column.'),
-  }),
+  z
+    .string()
+    .max(FILTER_LIMITS.stringExpression)
+    .describe('Inline aggregation expression, e.g. `Sum([Sales])`. Not a master item title.'),
+  measureInlineSchema,
+  measureMasterItemSchema,
 ]);
 
 const sortSchema = z.object({
@@ -76,6 +111,9 @@ export const queryTool = defineTool({
   description:
     'Execute an analytical query against a Qlik app. Returns a tabular result with the given dimensions ' +
     'and measures. Prefer master items (via `list_master_items`) over inventing your own measure expressions. ' +
+    'When using a master item, send `{masterItemId: "..."}` with the exact `id` returned by `list_master_items`; ' +
+    'do not send the title/name. Inline dimensions use strings or `{field, label?}`. Inline measures use ' +
+    'strings or `{expression, label?}`. ' +
     'For reusable app selections, call `apply_filters` before `query`. For one-shot filters, use ' +
     '`filters: [{field: "Region", values: ["EU", "US"]}]`. For advanced set analysis, use ' +
     '`setExpression` (e.g. `{<Year={"2025"}>}`). Always set a `limit` (default 1000, max 10000); the ' +
@@ -90,8 +128,10 @@ export const queryTool = defineTool({
       const doc = asDoc(handle);
 
       const combinedSet = combineSetExpression(input.filters, input.setExpression);
-      const dimDefs = input.dimensions.map((d) => normalizeDimension(d));
-      const measDefs = input.measures.map((m) => normalizeMeasure(m, combinedSet));
+      const [dimDefs, measDefs] = await Promise.all([
+        resolveDimensions(doc, input.dimensions),
+        resolveMeasures(doc, input.measures, combinedSet),
+      ]);
       const headers = [
         ...dimDefs.map((d) => ({ name: d.label, type: 'dimension' as const })),
         ...measDefs.map((m) => ({ name: m.label, type: 'measure' as const })),
@@ -104,7 +144,11 @@ export const queryTool = defineTool({
         qInfo: { qType: 'qac-query' },
         qHyperCubeDef: {
           qDimensions: dimDefs.map((d) => ({
-            qDef: { qFieldDefs: [d.field], qFieldLabels: [d.label] },
+            qDef: {
+              qFieldDefs: d.fieldDefs,
+              qFieldLabels: d.fieldLabels.length ? d.fieldLabels : [d.label],
+              ...(d.grouping ? { qGrouping: d.grouping } : {}),
+            },
           })),
           qMeasures: measDefs.map((m) => ({
             qDef: { qDef: m.expression, qLabel: m.label },
@@ -153,22 +197,192 @@ export const queryTool = defineTool({
   },
 });
 
-type NormalizedDimension = { field: string; label: string };
+type NormalizedDimension = {
+  fieldDefs: string[];
+  fieldLabels: string[];
+  label: string;
+  grouping?: string;
+};
 type NormalizedMeasure = { expression: string; label: string };
 
-function normalizeDimension(d: z.infer<typeof dimensionSchema>): NormalizedDimension {
-  if (typeof d === 'string') return { field: d, label: stripBrackets(d) };
-  return { field: d.field, label: d.label ?? stripBrackets(d.field) };
+type QueryDimension = z.infer<typeof dimensionSchema>;
+type QueryMeasure = z.infer<typeof measureSchema>;
+
+type MasterDimensionEntry = {
+  id: string;
+  title?: string;
+  fieldDefs?: string[];
+  fieldLabels?: string[];
+  grouping?: string;
+};
+
+type MasterMeasureEntry = {
+  id: string;
+  title?: string;
+  expression?: string;
+  label?: string;
+};
+
+async function resolveDimensions(doc: ReturnType<typeof asDoc>, dims: QueryDimension[]) {
+  const masterMap = hasMasterItemRef(dims) ? await loadMasterDimensions(doc) : undefined;
+  return dims.map((d) => normalizeDimension(d, masterMap));
+}
+
+async function resolveMeasures(
+  doc: ReturnType<typeof asDoc>,
+  measures: QueryMeasure[],
+  setExpression: string | undefined,
+) {
+  const masterMap = hasMasterItemRef(measures) ? await loadMasterMeasures(doc) : undefined;
+  return measures.map((m) => normalizeMeasure(m, setExpression, masterMap));
+}
+
+function normalizeDimension(
+  d: QueryDimension,
+  masterMap: Map<string, MasterDimensionEntry> | undefined,
+): NormalizedDimension {
+  if (typeof d === 'string') {
+    const label = stripBrackets(d);
+    return { fieldDefs: [d], fieldLabels: [label], label };
+  }
+  if ('masterItemId' in d) {
+    const master = masterMap?.get(d.masterItemId);
+    if (!master) {
+      throw new QacError(
+        'INVALID_INPUT',
+        `Unknown master dimension '${d.masterItemId}'. Use list_master_items and send its id, not title/name.`,
+        { masterItemId: d.masterItemId, itemType: 'dimension' },
+      );
+    }
+    if (!master.fieldDefs?.length) {
+      throw new QacError(
+        'INVALID_INPUT',
+        `Master dimension '${d.masterItemId}' has no field definition`,
+        {
+          masterItemId: d.masterItemId,
+          itemType: 'dimension',
+        },
+      );
+    }
+    const primaryFieldDef = master.fieldDefs[0] ?? d.masterItemId;
+    const fallbackLabel = master.fieldLabels?.[0] ?? master.title ?? stripBrackets(primaryFieldDef);
+    return {
+      fieldDefs: master.fieldDefs,
+      fieldLabels: master.fieldLabels?.length ? master.fieldLabels : [fallbackLabel],
+      label: d.label ?? fallbackLabel,
+      ...(master.grouping ? { grouping: master.grouping } : {}),
+    };
+  }
+  const label = d.label ?? stripBrackets(d.field);
+  return { fieldDefs: [d.field], fieldLabels: [label], label };
 }
 
 function normalizeMeasure(
-  m: z.infer<typeof measureSchema>,
+  m: QueryMeasure,
   setExpression: string | undefined,
+  masterMap: Map<string, MasterMeasureEntry> | undefined,
 ): NormalizedMeasure {
-  const raw = typeof m === 'string' ? m : m.expression;
+  const raw = resolveMeasureExpression(m, masterMap);
   const expression = applySetExpression(raw, setExpression);
-  const label = typeof m === 'string' ? m : (m.label ?? m.expression);
+  const label = resolveMeasureLabel(m, raw, masterMap);
   return { expression, label };
+}
+
+function resolveMeasureExpression(
+  m: QueryMeasure,
+  masterMap: Map<string, MasterMeasureEntry> | undefined,
+): string {
+  if (typeof m === 'string') return m;
+  if ('masterItemId' in m) {
+    const master = masterMap?.get(m.masterItemId);
+    if (!master) {
+      throw new QacError(
+        'INVALID_INPUT',
+        `Unknown master measure '${m.masterItemId}'. Use list_master_items and send its id, not title/name.`,
+        { masterItemId: m.masterItemId, itemType: 'measure' },
+      );
+    }
+    if (!master.expression) {
+      throw new QacError('INVALID_INPUT', `Master measure '${m.masterItemId}' has no expression`, {
+        masterItemId: m.masterItemId,
+        itemType: 'measure',
+      });
+    }
+    return master.expression;
+  }
+  return m.expression;
+}
+
+function resolveMeasureLabel(
+  m: QueryMeasure,
+  expression: string,
+  masterMap: Map<string, MasterMeasureEntry> | undefined,
+): string {
+  if (typeof m === 'string') return m;
+  if ('masterItemId' in m) {
+    const master = masterMap?.get(m.masterItemId);
+    return m.label ?? master?.label ?? master?.title ?? expression;
+  }
+  return m.label ?? m.expression;
+}
+
+function hasMasterItemRef(items: Array<QueryDimension | QueryMeasure>): boolean {
+  return items.some((item) => typeof item !== 'string' && 'masterItemId' in item);
+}
+
+async function loadMasterDimensions(
+  doc: ReturnType<typeof asDoc>,
+): Promise<Map<string, MasterDimensionEntry>> {
+  const raw = await doc.getDimensionList();
+  return new Map(
+    raw.map((item) => {
+      const entry = readMasterDimension(item);
+      return [entry.id, entry] as const;
+    }),
+  );
+}
+
+async function loadMasterMeasures(
+  doc: ReturnType<typeof asDoc>,
+): Promise<Map<string, MasterMeasureEntry>> {
+  const raw = await doc.getMeasureList();
+  return new Map(
+    raw.map((item) => {
+      const entry = readMasterMeasure(item);
+      return [entry.id, entry] as const;
+    }),
+  );
+}
+
+function readMasterDimension(item: unknown): MasterDimensionEntry {
+  const o = item as Record<string, unknown>;
+  const info = (o.qInfo ?? {}) as Record<string, unknown>;
+  const meta = (o.qMeta ?? {}) as Record<string, unknown>;
+  const data = (o.qData ?? {}) as Record<string, unknown>;
+  const dimInfo = (data.dim ?? data.qDim ?? {}) as Record<string, unknown>;
+  return {
+    id: String(info.qId ?? ''),
+    title: meta.title ? String(meta.title) : undefined,
+    fieldDefs: Array.isArray(dimInfo.qFieldDefs) ? (dimInfo.qFieldDefs as string[]) : undefined,
+    fieldLabels: Array.isArray(dimInfo.qFieldLabels)
+      ? (dimInfo.qFieldLabels as string[])
+      : undefined,
+    grouping: dimInfo.qGrouping ? String(dimInfo.qGrouping) : undefined,
+  };
+}
+
+function readMasterMeasure(item: unknown): MasterMeasureEntry {
+  const o = item as Record<string, unknown>;
+  const info = (o.qInfo ?? {}) as Record<string, unknown>;
+  const meta = (o.qMeta ?? {}) as Record<string, unknown>;
+  const data = (o.qData ?? {}) as Record<string, unknown>;
+  const measInfo = (data.measure ?? data.qMeasure ?? {}) as Record<string, unknown>;
+  return {
+    id: String(info.qId ?? ''),
+    title: meta.title ? String(meta.title) : undefined,
+    expression: measInfo.qDef ? String(measInfo.qDef) : undefined,
+    label: measInfo.qLabel ? String(measInfo.qLabel) : undefined,
+  };
 }
 
 function applySetExpression(expr: string, set: string | undefined): string {

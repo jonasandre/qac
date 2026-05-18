@@ -55,7 +55,19 @@ export function appCommand(): Command {
     .command('query <appId>')
     .description('Execute an analytical query (hypercube).')
     .option('--dim <field>', 'Dimension (repeatable)', collect, [])
+    .option(
+      '--master-dim <id>',
+      'Master dimension ID from `qac app master-items` (repeatable)',
+      collect,
+      [],
+    )
     .option('--measure <expr>', 'Measure expression (repeatable)', collect, [])
+    .option(
+      '--master-measure <id>',
+      'Master measure ID from `qac app master-items` (repeatable)',
+      collect,
+      [],
+    )
     .option('--filter <field=val,val>', 'Filter field=val[,val] (repeatable)', collect, [])
     .option('--set <expression>', 'Set analysis expression (e.g. {<Year={"2025"}>})')
     .option('--limit <n>', 'Max rows (default 1000, max 10000)', (v) => Number.parseInt(v, 10))
@@ -63,8 +75,8 @@ export function appCommand(): Command {
     .action(async (appId, opts, command) => {
       await runTool(queryTool, getGlobal(command), {
         appId,
-        dimensions: (opts.dim as string[]).map((d) => d),
-        measures: (opts.measure as string[]).map((m) => m),
+        dimensions: buildDimensions(opts.dim as string[], opts.masterDim as string[]),
+        measures: buildMeasures(opts.measure as string[], opts.masterMeasure as string[]),
         filters: parseFilters(opts.filter as string[]),
         setExpression: opts.set,
         limit: opts.limit,
@@ -134,6 +146,26 @@ export function appCommand(): Command {
 
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
+}
+
+function buildDimensions(
+  inlineDimensions: string[],
+  masterDimensions: string[],
+): Array<string | { masterItemId: string }> {
+  return [
+    ...inlineDimensions.map((dimension) => dimension),
+    ...masterDimensions.map((masterItemId) => ({ masterItemId })),
+  ];
+}
+
+function buildMeasures(
+  inlineMeasures: string[],
+  masterMeasures: string[],
+): Array<string | { masterItemId: string }> {
+  return [
+    ...inlineMeasures.map((measure) => measure),
+    ...masterMeasures.map((masterItemId) => ({ masterItemId })),
+  ];
 }
 
 function parseFilters(raw: string[]): Array<{ field: string; values: string[] }> | undefined {

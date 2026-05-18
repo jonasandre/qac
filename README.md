@@ -210,6 +210,10 @@ qac app query <appId> \
   --dim "[Region]" \
   --measure "Sum([Sales])" \
   --limit 100
+qac app query <appId> \
+  --master-dim D1 \
+  --master-measure M1 \
+  --limit 100
 qac app filter get <appId>
 qac app filter clear <appId>
 qac app eval <appId> --expr "Sum([Sales])"
@@ -218,6 +222,9 @@ qac app eval <appId> --expr "Sum([Sales])"
 All commands write `{"ok": true, "data": ...}` to stdout. Errors go to stderr
 as `{"ok": false, "error": {"code": "...", "message": "...", "details": {...}}}`
 with exit code 1 (usage), 2 (execution) or 3 (auth/config).
+
+For master items, first call `qac app master-items <appId>` / `list_master_items`
+and then pass the returned **ID**. Do not pass the human title/name to `query`.
 
 ## MCP usage
 
@@ -370,14 +377,16 @@ are available.
 | `apply_filters`     | QIX   | Apply reusable app selections.                    |
 | `clear_filters`     | QIX   | Clear all selections or selected fields.          |
 | `get_filters`       | QIX   | Inspect current app selections.                   |
-| `query`             | QIX   | Run a hypercube query (rows × dim/measure).       |
+| `query`             | QIX   | Run a hypercube query with inline defs or master item IDs. |
 | `evaluate`          | QIX   | Evaluate a single expression and return a scalar. |
 | `list_contexts`     | local | List configured tenant contexts (MCP only).       |
 
 Recommended MCP workflow for filtered analysis: use `list_fields` and
 `describe_field` to discover valid fields/values, call `apply_filters`, run
 `query` or `evaluate`, then call `clear_filters` when the filtered analysis is
-done. `query.filters` remains available for one-shot filters.
+done. `query.filters` remains available for one-shot filters. When `query`
+uses master items, send `masterItemId` values returned by `list_master_items`,
+not titles/names.
 
 ## Development
 

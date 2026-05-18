@@ -122,4 +122,37 @@ describe('CLI smoke', () => {
     expect(res.exit).toBe(2);
     expect(res.stderr).toContain('filter apply requires');
   });
+
+  test('query accepts master item flags', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'qac-cli-'));
+    const cfg = join(dir, 'config.yaml');
+    try {
+      await runCli([
+        '--config',
+        cfg,
+        'context',
+        'create',
+        'prod',
+        '--tenant',
+        'https://acme.qlikcloud.com',
+        '--api-key',
+        'k',
+      ]);
+      const res = await runCli([
+        '--config',
+        cfg,
+        'app',
+        'query',
+        'app-id',
+        '--master-dim',
+        'D1',
+        '--master-measure',
+        'M1',
+      ]);
+      expect(res.exit).not.toBe(1);
+      expect(res.stderr).not.toContain('unknown option');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

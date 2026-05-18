@@ -2,9 +2,7 @@
   "name": "qac-monorepo",
   "private": true,
   "version": "0.2.0",
-  "workspaces": [
-    "packages/*"
-  ],
+  "workspaces": ["packages/*"],
   "scripts": {
     "typecheck": "bunx tsc --noEmit -p packages/core && bunx tsc --noEmit -p packages/cli && bunx tsc --noEmit -p packages/mcp",
     "test": "bun test",

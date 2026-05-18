@@ -499,6 +499,106 @@ describe('query', () => {
     expect(capturedDef).toContain("{<[Region]={'EU','US'}>}");
   });
 
+  test('resolves master dimension by id', async () => {
+    let capturedProps: Record<string, unknown> | undefined;
+    const doc = {
+      getDimensionList: async () => [
+        {
+          qInfo: { qId: 'D1' },
+          qMeta: { title: 'Region' },
+          qData: { dim: { qFieldDefs: ['[Region]'], qFieldLabels: ['Region'] } },
+        },
+      ],
+      createSessionObject: async (props: unknown) => {
+        capturedProps = props as Record<string, unknown>;
+        return {
+          getLayout: async () => ({ qHyperCube: { qSize: { qcx: 1, qcy: 0 }, qDataPages: [] } }),
+          getHyperCubeData: async () => [],
+        };
+      },
+    };
+
+    const out = await queryTool.run(
+      ctx,
+      {
+        appId: 'a1',
+        dimensions: [{ masterItemId: 'D1' }],
+        measures: ['Count([Region])'],
+        limit: 100,
+        offset: 0,
+      },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+
+    expect(out.headers[0]).toEqual({ name: 'Region', type: 'dimension' });
+    const cubeDef = (capturedProps?.qHyperCubeDef ?? {}) as {
+      qDimensions?: Array<{ qDef?: { qFieldDefs?: string[]; qFieldLabels?: string[] } }>;
+    };
+    expect(cubeDef.qDimensions?.[0]?.qDef?.qFieldDefs).toEqual(['[Region]']);
+    expect(cubeDef.qDimensions?.[0]?.qDef?.qFieldLabels).toEqual(['Region']);
+  });
+
+  test('resolves master measure by id and still applies set analysis', async () => {
+    let capturedDef: string | undefined;
+    const doc = {
+      getMeasureList: async () => [
+        {
+          qInfo: { qId: 'M1' },
+          qMeta: { title: 'Sales' },
+          qData: { measure: { qDef: 'Sum([Sales])', qLabel: 'Sales' } },
+        },
+      ],
+      createSessionObject: async (props: unknown) => {
+        const p = props as { qHyperCubeDef: { qMeasures: Array<{ qDef: { qDef: string } }> } };
+        capturedDef = p.qHyperCubeDef.qMeasures[0]?.qDef.qDef;
+        return {
+          getLayout: async () => ({ qHyperCube: { qSize: { qcx: 1, qcy: 0 }, qDataPages: [] } }),
+          getHyperCubeData: async () => [],
+        };
+      },
+    };
+
+    const out = await queryTool.run(
+      ctx,
+      {
+        appId: 'a1',
+        dimensions: [],
+        measures: [{ masterItemId: 'M1' }],
+        filters: [{ field: 'Region', values: ['EU'] }],
+        limit: 100,
+        offset: 0,
+      },
+      { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+    );
+
+    expect(out.headers[0]).toEqual({ name: 'Sales', type: 'measure' });
+    expect(capturedDef).toContain("Sum({<[Region]={'EU'}>} [Sales])");
+  });
+
+  test('rejects unknown master item ids', async () => {
+    const doc = {
+      getMeasureList: async () => [],
+      createSessionObject: async () => ({
+        getLayout: async () => ({ qHyperCube: { qSize: { qcx: 1, qcy: 0 }, qDataPages: [] } }),
+        getHyperCubeData: async () => [],
+      }),
+    };
+
+    await expect(
+      queryTool.run(
+        ctx,
+        {
+          appId: 'a1',
+          dimensions: [],
+          measures: [{ masterItemId: 'M404' }],
+          limit: 100,
+          offset: 0,
+        },
+        { qix: makeSession(doc), usage: new NoopUsageRecorder() },
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT', details: { masterItemId: 'M404' } });
+  });
+
   test('rejects when no dim and no measure', async () => {
     const doc = {
       createSessionObject: async () => ({
@@ -534,6 +634,14 @@ describe('query', () => {
   test('schema rejects overlong expression', () => {
     const big = 'x'.repeat(5001);
     const result = queryInput.safeParse({ appId: 'a1', measures: [big] });
+    expect(result.success).toBe(false);
+  });
+
+  test('schema rejects title-only master item objects', () => {
+    const result = queryInput.safeParse({
+      appId: 'a1',
+      measures: [{ title: 'Sales' }],
+    });
     expect(result.success).toBe(false);
   });
 
