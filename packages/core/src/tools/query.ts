@@ -4,72 +4,84 @@ import { FILTER_LIMITS, filterSchema } from './filter-schema.ts';
 import { type NxDataPage, asDoc } from './qix-helpers.ts';
 import { defineTool } from './tool.ts';
 
-const dimensionInlineSchema = z.object({
-  field: z
-    .string()
-    .max(FILTER_LIMITS.stringExpression)
-    .describe('Inline field name or expression for the dimension. Not a master item title.'),
-  label: z
-    .string()
-    .max(FILTER_LIMITS.stringField)
-    .optional()
-    .describe('Display label for the dimension column.'),
-});
-
-const dimensionMasterItemSchema = z.object({
-  masterItemId: z
-    .string()
-    .min(1)
-    .max(FILTER_LIMITS.stringField)
-    .describe('Master dimension ID from `list_master_items`. Use the `id`, not the title/name.'),
-  label: z
-    .string()
-    .max(FILTER_LIMITS.stringField)
-    .optional()
-    .describe('Optional display label override for the dimension column.'),
-});
+const dimensionObjectSchema = z
+  .object({
+    field: z
+      .string()
+      .max(FILTER_LIMITS.stringExpression)
+      .optional()
+      .describe('Inline field name or expression for the dimension. Not a master item title.'),
+    masterItemId: z
+      .string()
+      .min(1)
+      .max(FILTER_LIMITS.stringField)
+      .optional()
+      .describe('Master dimension ID from `list_master_items`. Use the `id`, not the title/name.'),
+    label: z
+      .string()
+      .max(FILTER_LIMITS.stringField)
+      .optional()
+      .describe('Display label for the dimension column.'),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasField = typeof value.field === 'string' && value.field.length > 0;
+    const hasMasterItemId = typeof value.masterItemId === 'string' && value.masterItemId.length > 0;
+    if (hasField === hasMasterItemId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Dimension objects must include exactly one of `field` or `masterItemId`',
+        path: hasField ? ['masterItemId'] : ['field'],
+      });
+    }
+  });
 
 const dimensionSchema = z.union([
   z
     .string()
     .max(FILTER_LIMITS.stringExpression)
     .describe('Inline field name (will be bracketed) or expression. Not a master item title.'),
-  dimensionInlineSchema,
-  dimensionMasterItemSchema,
+  dimensionObjectSchema,
 ]);
 
-const measureInlineSchema = z.object({
-  expression: z
-    .string()
-    .max(FILTER_LIMITS.stringExpression)
-    .describe('Inline aggregation expression, e.g. `Sum([Sales])`. Not a master item title.'),
-  label: z
-    .string()
-    .max(FILTER_LIMITS.stringField)
-    .optional()
-    .describe('Display label for the measure column.'),
-});
-
-const measureMasterItemSchema = z.object({
-  masterItemId: z
-    .string()
-    .min(1)
-    .max(FILTER_LIMITS.stringField)
-    .describe('Master measure ID from `list_master_items`. Use the `id`, not the title/name.'),
-  label: z
-    .string()
-    .max(FILTER_LIMITS.stringField)
-    .optional()
-    .describe('Optional display label override for the measure column.'),
-});
+const measureObjectSchema = z
+  .object({
+    expression: z
+      .string()
+      .max(FILTER_LIMITS.stringExpression)
+      .optional()
+      .describe('Inline aggregation expression, e.g. `Sum([Sales])`. Not a master item title.'),
+    masterItemId: z
+      .string()
+      .min(1)
+      .max(FILTER_LIMITS.stringField)
+      .optional()
+      .describe('Master measure ID from `list_master_items`. Use the `id`, not the title/name.'),
+    label: z
+      .string()
+      .max(FILTER_LIMITS.stringField)
+      .optional()
+      .describe('Display label for the measure column.'),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasExpression = typeof value.expression === 'string' && value.expression.length > 0;
+    const hasMasterItemId = typeof value.masterItemId === 'string' && value.masterItemId.length > 0;
+    if (hasExpression === hasMasterItemId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Measure objects must include exactly one of `expression` or `masterItemId`',
+        path: hasExpression ? ['masterItemId'] : ['expression'],
+      });
+    }
+  });
 
 const measureSchema = z.union([
   z
     .string()
     .max(FILTER_LIMITS.stringExpression)
     .describe('Inline aggregation expression, e.g. `Sum([Sales])`. Not a master item title.'),
-  measureInlineSchema,
-  measureMasterItemSchema,
+  measureObjectSchema,
 ]);
 
 const sortSchema = z.object({
@@ -245,7 +257,7 @@ function normalizeDimension(
     const label = stripBrackets(d);
     return { fieldDefs: [d], fieldLabels: [label], label };
   }
-  if ('masterItemId' in d) {
+  if (hasDimensionMasterItemId(d)) {
     const master = masterMap?.get(d.masterItemId);
     if (!master) {
       throw new QacError(
@@ -273,6 +285,12 @@ function normalizeDimension(
       ...(master.grouping ? { grouping: master.grouping } : {}),
     };
   }
+  if (!hasDimensionField(d)) {
+    throw new QacError(
+      'INVALID_INPUT',
+      'Dimension objects must include exactly one of `field` or `masterItemId`',
+    );
+  }
   const label = d.label ?? stripBrackets(d.field);
   return { fieldDefs: [d.field], fieldLabels: [label], label };
 }
@@ -293,7 +311,7 @@ function resolveMeasureExpression(
   masterMap: Map<string, MasterMeasureEntry> | undefined,
 ): string {
   if (typeof m === 'string') return m;
-  if ('masterItemId' in m) {
+  if (hasMeasureMasterItemId(m)) {
     const master = masterMap?.get(m.masterItemId);
     if (!master) {
       throw new QacError(
@@ -310,6 +328,12 @@ function resolveMeasureExpression(
     }
     return master.expression;
   }
+  if (!hasMeasureExpression(m)) {
+    throw new QacError(
+      'INVALID_INPUT',
+      'Measure objects must include exactly one of `expression` or `masterItemId`',
+    );
+  }
   return m.expression;
 }
 
@@ -319,15 +343,46 @@ function resolveMeasureLabel(
   masterMap: Map<string, MasterMeasureEntry> | undefined,
 ): string {
   if (typeof m === 'string') return m;
-  if ('masterItemId' in m) {
+  if (hasMeasureMasterItemId(m)) {
     const master = masterMap?.get(m.masterItemId);
     return m.label ?? master?.label ?? master?.title ?? expression;
   }
-  return m.label ?? m.expression;
+  if (hasMeasureExpression(m)) return m.label ?? m.expression;
+  return expression;
 }
 
 function hasMasterItemRef(items: Array<QueryDimension | QueryMeasure>): boolean {
-  return items.some((item) => typeof item !== 'string' && 'masterItemId' in item);
+  return items.some(
+    (item) =>
+      typeof item !== 'string' &&
+      'masterItemId' in item &&
+      typeof item.masterItemId === 'string' &&
+      item.masterItemId.length > 0,
+  );
+}
+
+function hasDimensionMasterItemId(
+  value: Exclude<QueryDimension, string>,
+): value is Exclude<QueryDimension, string> & { masterItemId: string } {
+  return typeof value.masterItemId === 'string' && value.masterItemId.length > 0;
+}
+
+function hasDimensionField(
+  value: Exclude<QueryDimension, string>,
+): value is Exclude<QueryDimension, string> & { field: string } {
+  return typeof value.field === 'string' && value.field.length > 0;
+}
+
+function hasMeasureMasterItemId(
+  value: Exclude<QueryMeasure, string>,
+): value is Exclude<QueryMeasure, string> & { masterItemId: string } {
+  return typeof value.masterItemId === 'string' && value.masterItemId.length > 0;
+}
+
+function hasMeasureExpression(
+  value: Exclude<QueryMeasure, string>,
+): value is Exclude<QueryMeasure, string> & { expression: string } {
+  return typeof value.expression === 'string' && value.expression.length > 0;
 }
 
 async function loadMasterDimensions(

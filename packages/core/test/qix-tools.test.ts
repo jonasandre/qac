@@ -637,6 +637,15 @@ describe('query', () => {
     expect(result.success).toBe(false);
   });
 
+  test('schema accepts masterItemId-only dimension and measure objects', () => {
+    const result = queryInput.safeParse({
+      appId: 'a1',
+      dimensions: [{ masterItemId: 'D1' }],
+      measures: [{ masterItemId: 'M1' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
   test('schema rejects title-only master item objects', () => {
     const result = queryInput.safeParse({
       appId: 'a1',

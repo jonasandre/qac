@@ -150,4 +150,78 @@ describe('MCP server', () => {
     expect(payload.error).toBeDefined();
     await client.close();
   });
+
+  test('query schema and execution accept masterItemId-only objects', async () => {
+    const ctx: QlikContext = {
+      name: 'prod',
+      tenant: 'https://x',
+      credentials: { type: 'api-key', apiKey: 'k' },
+    };
+    const provider = new FakeProvider({ prod: ctx }, 'prod');
+    const qix = new FakeQix(() => ({
+      getDimensionList: async () => [
+        {
+          qInfo: { qId: 'D1' },
+          qMeta: { title: 'Region' },
+          qData: { dim: { qFieldDefs: ['[Region]'], qFieldLabels: ['Region'] } },
+        },
+      ],
+      getMeasureList: async () => [
+        {
+          qInfo: { qId: 'M1' },
+          qMeta: { title: 'Sales' },
+          qData: { measure: { qDef: 'Sum([Sales])', qLabel: 'Sales' } },
+        },
+      ],
+      createSessionObject: async () => ({
+        getLayout: async () => ({ qHyperCube: { qSize: { qcx: 2, qcy: 0 }, qDataPages: [] } }),
+        getHyperCubeData: async () => [],
+      }),
+    }));
+    const client = await connectClient({ provider, qix });
+
+    const tools = await client.listTools();
+    const queryTool = tools.tools.find((tool) => tool.name === 'query');
+    const dimensionVariants = ((
+      queryTool?.inputSchema as {
+        properties?: { dimensions?: { items?: { anyOf?: Array<unknown> } } };
+      }
+    )?.properties?.dimensions?.items?.anyOf ?? []) as Array<{
+      type?: string;
+      required?: string[];
+      properties?: Record<string, unknown>;
+    }>;
+    const measureVariants = ((
+      queryTool?.inputSchema as {
+        properties?: { measures?: { items?: { anyOf?: Array<unknown> } } };
+      }
+    )?.properties?.measures?.items?.anyOf ?? []) as Array<{
+      type?: string;
+      required?: string[];
+      properties?: Record<string, unknown>;
+    }>;
+
+    const dimensionObject = dimensionVariants.find((variant) => variant.type === 'object');
+    const measureObject = measureVariants.find((variant) => variant.type === 'object');
+    expect(dimensionObject?.properties?.masterItemId).toBeDefined();
+    expect(dimensionObject?.required ?? []).not.toContain('field');
+    expect(measureObject?.properties?.masterItemId).toBeDefined();
+    expect(measureObject?.required ?? []).not.toContain('expression');
+
+    const res = await client.callTool({
+      name: 'query',
+      arguments: {
+        appId: 'a1',
+        dimensions: [{ masterItemId: 'D1' }],
+        measures: [{ masterItemId: 'M1' }],
+      },
+    });
+    expect(res.isError).not.toBe(true);
+    const payload = JSON.parse((res.content as Array<{ text: string }>)?.[0]?.text ?? '{}');
+    expect(payload.headers).toEqual([
+      { name: 'Region', type: 'dimension' },
+      { name: 'Sales', type: 'measure' },
+    ]);
+    await client.close();
+  });
 });
